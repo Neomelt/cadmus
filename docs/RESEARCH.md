@@ -24,8 +24,8 @@
 |---|---|---|
 | iPad 生态阅读 | Apple Books、Kindle | 商店/云优先，自有文件与批注导出受限（厂商文档与产品界面核对） |
 | 云阅读服务 | Readwise Reader | 官方定位 "read-it-later for power readers"，PDF/EPUB 上传、统一下划线、TTS、spaced repetition 复习；云优先、订阅制（readwise.io/read，2026-10 抓取） |
-| 开源阅读 | KOReader | 30.2k★，支持 PDF/EPUB/DjVu 等，**内置 K2pdfopt 重排**、字典、OPDS；官方支持设备列表：Cervantes/Kindle/Kobo/PocketBook/reMarkable/Android/Linux——**不含 iPad/iOS**（GitHub README，2026-10 抓取） |
-| 开源阅读（参考对象） | Kazumi | 35.1k★，Flutter，GPL-3.0，Android/iOS/桌面全平台；官方描述"基于自定义规则的番剧采集 APP"——**"源/规则"模式在 iOS 上架的先例**（GitHub，2026-10 抓取） |
+| 开源阅读 | KOReader | 30.2k★，支持 PDF/EPUB/DjVu 等，**内置 K2pdfopt 重排**、字典、OPDS；官方支持设备列表：Cervantes/Kindle/Kobo/PocketBook/reMarkable/Android/Linux，**不含 iPad/iOS**（GitHub README，2026-10 抓取） |
+| 开源阅读（参考对象） | Kazumi | 35.1k★，Flutter，GPL-3.0，Android/iOS/桌面全平台；官方描述是"基于自定义规则的番剧采集 APP"；**"源/规则"模式在 iOS 有上架先例**（GitHub，2026-10 抓取） |
 | 专业标注 | MarginNote、LiquidText | 纸张/图像模型＋私有标注体系，无重排（产品公开文档） |
 | 中文生态 | 微信读书、掌阅 | 云书城逻辑，本地库与第三方笔记格式不互通（产品界面核验） |
 
@@ -40,7 +40,7 @@
 | 搜索式 | 结果 |
 |---|---|
 | `pdf reflow language:rust` | 最高 0★（`angristan/paprika`：WASM PDF 重排，停更；`timothyandrew/reflow`：去连字符工具） |
-| `epub reader language:rust` | 1712★ `baskerville/plato`（墨水屏设备）、1216★ `bugzmanov/bookokrat`（终端）、360★ `hygg`（TUI）、340★ `bk`（终端）——**均为终端/墨水屏，无移动端** |
+| `epub reader language:rust` | 1712★ `baskerville/plato`（墨水屏设备）、1216★ `bugzmanov/bookokrat`（终端）、360★ `hygg`（TUI）、340★ `bk`（终端）；**均为终端/墨水屏，无移动端** |
 | `reader ios android language:rust` | 仅 1 个 0★ 仓库（novel reader FFI 实验） |
 
 **结论**：Rust + 移动端阅读器是空白生态位；现有 Rust 阅读项目集中在终端/墨水屏，说明该语言在此类产品中被验证可行，但移动端没有先行者。
@@ -66,7 +66,7 @@
 
 - **Apple App Store 审核指南 3.1.3(a)「Reader Apps」**："Apps may allow a user to access previously purchased content or content subscriptions (specifically: magazines, newspapers, books, audio, music, and video)… 该条款允许阅读器应用访问用户在别处获得的内容，并提供免费层账号功能"；
 - 对本产品的含义：**本地文件导入 + 标准协议（OPDS/WebDAV）的一期形态没有内购义务**，属低风险上架品类；
-- **风险项**是"第三方规则源"（网页采集）——与 Kazumi 同类模式的先例存在于 iOS（35.1k★、GPL 应用已上架），但为规避审核不确定性，规则源不进商店包（决策 D6、§9.3）。
+- **风险项**是"第三方规则源"（网页采集）。与 Kazumi 同类的模式在 iOS 有上架先例（35.1k★、GPL 应用已上架），但为规避审核不确定性，规则源不进商店包（决策 D6、§9.3）。
 
 ## 6. 未能验证的假设（带风险标签）
 
