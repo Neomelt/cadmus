@@ -8,6 +8,7 @@
 ### 新增
 - CHANGELOG.md
 - DESIGN-ENGINE.md：M1 阅读引擎设计 v1.0（评审通过）
+- crates/cadmus-core：块模型、锚点与稳定块 id（M1 第 1 步）
 
 ### 变更
 - PRODUCT v1.1：设备范围明确（iOS 仅 iPad、手机仅 Android，D11）；FR-2.11 提为 M；补问题④；非目标格式与 DRM；性能基线

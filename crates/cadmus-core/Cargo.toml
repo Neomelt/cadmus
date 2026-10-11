@@ -1,0 +1,8 @@
+[package]
+name = "cadmus-core"
+description = "cadmus 核心：文档块模型、锚点与稳定标识（无 UI 依赖）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
