@@ -4,11 +4,13 @@
 //! 对应设计见 `docs/DESIGN-ENGINE.md` §2.2、§4.1。
 
 pub mod anchor;
+pub mod cancel;
 pub mod error;
 pub mod hash;
 pub mod model;
 
 pub use anchor::{Anchor, BlockId, stable_block_id};
+pub use cancel::Cancel;
 pub use error::{Error, Result};
 pub use hash::content_hash;
 pub use model::{BitmapRef, Block, BlockKind, Document, PageRange, Payload};

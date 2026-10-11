@@ -6,8 +6,9 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use cadmus_core::{Error, Result};
-use cadmus_epub::{TxtOptions, parse_txt_bytes};
+use cadmus_core::{Block, BlockKind, Cancel, Document, Error, Payload, Result};
+use cadmus_epub::{EpubOptions, TxtOptions, parse_epub, parse_txt_bytes};
+use cadmus_reflow::{ReflowOptions, reflow};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
@@ -109,18 +110,178 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
-        Command::Reflow(args) => Err(Error::Unsupported(format!(
-            "reflow 尚未接通（{}，viewport={}，pages={:?}）",
-            args.file.display(),
-            args.viewport,
-            args.pages
-        ))),
-        Command::Epub(args) => Err(Error::Unsupported(format!(
-            "epub 尚未接通（{}）",
-            args.file.display()
-        ))),
+        Command::Reflow(args) => run_reflow(&args),
+        Command::Epub(args) => run_epub(&args),
         Command::Txt(args) => run_txt(&args),
         Command::Bench(args) => run_bench(&args),
+    }
+}
+
+fn run_reflow(args: &ReflowArgs) -> Result<ExitCode> {
+    let _ = &args.viewport; // M1 仅记录（DESIGN-ENGINE §2.1）
+    let options = ReflowOptions {
+        page_range: parse_page_range(args.pages.as_deref())?,
+        out_dir: args
+            .out
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("cadmus-out")),
+    };
+    let cancel = Cancel::new();
+    let document = reflow(&args.file, &options, &cancel)?;
+
+    let degraded = document
+        .blocks
+        .iter()
+        .filter(|block| block.kind == BlockKind::PageBitmap)
+        .count();
+    eprintln!(
+        "{} 个块{}",
+        document.blocks.len(),
+        if degraded > 0 {
+            format!("，{degraded} 页整页位图降级")
+        } else {
+            String::new()
+        }
+    );
+
+    match args.dump {
+        ReflowDump::Text => {
+            for block in &document.blocks {
+                print_block_text(block);
+            }
+        }
+        ReflowDump::Json => {
+            println!("{}", document_json(&document));
+        }
+    }
+
+    Ok(if degraded > 0 {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+fn print_block_text(block: &Block) {
+    let page = block.page_range.map(|(start, _)| start + 1).unwrap_or(0);
+    match (&block.kind, &block.payload) {
+        (_, Payload::Text(text)) => println!("{text}"),
+        (BlockKind::Figure, Payload::Bitmap(_)) => println!("[图 p.{page}]"),
+        (BlockKind::Formula, Payload::Bitmap(_)) => println!("[公式 p.{page}]"),
+        (BlockKind::Table, Payload::Bitmap(_)) => println!("[表格 p.{page}]"),
+        (BlockKind::Code, Payload::Bitmap(_)) => println!("[代码 p.{page}]"),
+        (BlockKind::PageBitmap, Payload::Bitmap(_)) => println!("[整页位图 p.{page}（降级）]"),
+        (_, Payload::Bitmap(_)) => println!("[位图 p.{page}]"),
+    }
+}
+
+fn document_json(document: &Document) -> serde_json::Value {
+    let blocks: Vec<serde_json::Value> = document.blocks.iter().map(block_json).collect();
+    serde_json::json!({
+        "format_version": 1,
+        "doc_hash": document.doc_hash,
+        "title": document.title,
+        "blocks": blocks,
+    })
+}
+
+fn block_json(block: &Block) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    map.insert("id".into(), block.id.into());
+    map.insert("order".into(), block.order.into());
+    let kind = match block.kind {
+        BlockKind::Heading { level } => {
+            map.insert("level".into(), level.into());
+            "heading"
+        }
+        BlockKind::Paragraph => "paragraph",
+        BlockKind::Figure => "figure",
+        BlockKind::Table => "table",
+        BlockKind::Formula => "formula",
+        BlockKind::Code => "code",
+        BlockKind::Footnote => "footnote",
+        BlockKind::PageBitmap => "page_bitmap",
+    };
+    map.insert("kind".into(), kind.into());
+    if let Some((start, end)) = block.page_range {
+        map.insert("page_range".into(), serde_json::json!([start, end]));
+    }
+    match &block.payload {
+        Payload::Text(text) => {
+            map.insert("text".into(), text.clone().into());
+        }
+        Payload::Bitmap(bitmap) => {
+            map.insert(
+                "bitmap".into(),
+                serde_json::json!({
+                    "path": bitmap.path,
+                    "width_px": bitmap.width_px,
+                    "height_px": bitmap.height_px,
+                }),
+            );
+        }
+    }
+    serde_json::Value::Object(map)
+}
+
+fn run_epub(args: &EpubArgs) -> Result<ExitCode> {
+    let options = EpubOptions {
+        out_dir: args.out.clone(),
+    };
+    let (document, report) = parse_epub(&args.file, &options)?;
+    for warning in &report.warnings {
+        eprintln!("警告：{warning}");
+    }
+    eprintln!(
+        "{} 章；{} 个块；语言 {}",
+        report.chapters,
+        document.blocks.len(),
+        report.language.as_deref().unwrap_or("未标注")
+    );
+
+    match args.dump {
+        EpubDump::Text => {
+            for block in &document.blocks {
+                print_block_text(block);
+            }
+        }
+        EpubDump::Blocks => {
+            for block in &document.blocks {
+                match &block.payload {
+                    Payload::Text(text) => println!(
+                        "{:>4}  {:10}  {} 字符",
+                        block.order,
+                        kind_name(&block.kind),
+                        text.chars().count()
+                    ),
+                    Payload::Bitmap(bitmap) => println!(
+                        "{:>4}  {:10}  {}",
+                        block.order,
+                        kind_name(&block.kind),
+                        bitmap.path
+                    ),
+                }
+            }
+        }
+    }
+
+    Ok(if report.warnings.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
+    })
+}
+
+fn kind_name(kind: &BlockKind) -> &'static str {
+    match kind {
+        BlockKind::Heading { .. } => "heading",
+        BlockKind::Paragraph => "paragraph",
+        BlockKind::Figure => "figure",
+        BlockKind::Table => "table",
+        BlockKind::Formula => "formula",
+        BlockKind::Code => "code",
+        BlockKind::Footnote => "footnote",
+        BlockKind::PageBitmap => "page_bitmap",
     }
 }
 
@@ -152,7 +313,7 @@ fn run_txt(args: &TxtArgs) -> Result<ExitCode> {
         TxtDump::Chapters => {
             let mut index = 0usize;
             for block in &document.blocks {
-                if let cadmus_core::BlockKind::Heading { level } = block.kind {
+                if let BlockKind::Heading { level } = block.kind {
                     index += 1;
                     println!("{index:>4}  L{level}  {}", block.as_text().unwrap_or(""));
                 }
@@ -168,16 +329,52 @@ fn run_txt(args: &TxtArgs) -> Result<ExitCode> {
 }
 
 fn run_bench(args: &BenchArgs) -> Result<ExitCode> {
-    // 目前仅 TXT；reflow/epub 接通后按扩展名分发。
-    let bytes = std::fs::read(&args.file)?;
+    let extension = args
+        .file
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let mut timings = Vec::new();
     for _ in 0..args.repeat.max(1) {
         let start = Instant::now();
-        let _ = parse_txt_bytes(&bytes, &TxtOptions::default())?;
+        if extension == "pdf" {
+            let cancel = Cancel::new();
+            let options = ReflowOptions::new(std::env::temp_dir().join("cadmus-bench-out"));
+            let _ = reflow(&args.file, &options, &cancel)?;
+        } else {
+            let bytes = std::fs::read(&args.file)?;
+            let _ = parse_txt_bytes(&bytes, &TxtOptions::default())?;
+        }
         timings.push(start.elapsed());
     }
     timings.sort();
-    let median = timings[timings.len() / 2];
-    println!("{} 次：中位 {:?}", timings.len(), median);
+    println!(
+        "{} 次：中位 {:?}",
+        timings.len(),
+        timings[timings.len() / 2]
+    );
     Ok(ExitCode::SUCCESS)
+}
+
+fn parse_page_range(spec: Option<&str>) -> Result<Option<(u32, u32)>> {
+    let Some(spec) = spec else {
+        return Ok(None);
+    };
+    let (start, end) = match spec.split_once('-') {
+        Some((start, end)) => (start, end),
+        None => (spec, spec),
+    };
+    let start: u32 = start
+        .trim()
+        .parse()
+        .map_err(|_| Error::Unsupported(format!("页范围格式错误：{spec}")))?;
+    let end: u32 = end
+        .trim()
+        .parse()
+        .map_err(|_| Error::Unsupported(format!("页范围格式错误：{spec}")))?;
+    if start == 0 || start > end {
+        return Err(Error::Unsupported(format!("页范围无效：{spec}")));
+    }
+    Ok(Some((start, end)))
 }

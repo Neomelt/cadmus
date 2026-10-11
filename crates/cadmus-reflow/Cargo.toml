@@ -1,0 +1,11 @@
+[package]
+name = "cadmus-reflow"
+description = "cadmus PDF 重排：布局分析 + 阅读顺序重建"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cadmus-core = { path = "../cadmus-core" }
+pdfium-render = "0.9"
+image = { version = "0.25", default-features = false, features = ["png"] }

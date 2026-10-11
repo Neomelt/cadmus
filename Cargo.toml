@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/cadmus-core", "crates/cadmus-epub", "cli"]
+members = ["crates/cadmus-core", "crates/cadmus-epub", "crates/cadmus-reflow", "cli"]
 
 [workspace.package]
 version = "0.1.0"

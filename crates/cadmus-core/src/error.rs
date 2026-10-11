@@ -16,6 +16,8 @@ pub enum Error {
     Unsupported(String),
     /// 解析失败（单页/单章级降级由调用方处理，此处为整体失败）。
     Parse(String),
+    /// 操作已取消。
+    Cancelled,
 }
 
 impl fmt::Display for Error {
@@ -25,6 +27,7 @@ impl fmt::Display for Error {
             Self::Encrypted => write!(f, "文档已加密，M1 不支持打开"),
             Self::Unsupported(msg) => write!(f, "不支持：{msg}"),
             Self::Parse(msg) => write!(f, "解析失败：{msg}"),
+            Self::Cancelled => write!(f, "操作已取消"),
         }
     }
 }

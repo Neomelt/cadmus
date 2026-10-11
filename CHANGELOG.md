@@ -11,6 +11,10 @@
 - crates/cadmus-core：块模型、锚点与稳定块 id（M1 第 1 步）
 - crates/cadmus-epub：TXT 解析（编码探测、章节切分、块序列生成）
 - cadmus-cli：命令面（reflow/epub/txt/bench）；TXT 已接通
+- crates/cadmus-reflow：PDF 重排（pdfium 适配、分栏检测、段落/区域/阅读顺序、原子块栅格化、整页降级）
+- crates/cadmus-epub：EPUB 解析（容器/OPF/spine、XHTML→块序列、图片导出）
+- cadmus-cli：reflow/epub 接通（reflow 支持 --dump json 与占位符输出）
+- tests/fixtures：F1–F6 来源说明与合成双栏 PDF 脚本；CI（fmt/clippy/test）
 
 ### 变更
 - PRODUCT v1.1：设备范围明确（iOS 仅 iPad、手机仅 Android，D11）；FR-2.11 提为 M；补问题④；非目标格式与 DRM；性能基线
