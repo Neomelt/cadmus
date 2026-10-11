@@ -18,6 +18,15 @@
 | [docs/DESIGN-ENGINE.md](docs/DESIGN-ENGINE.md) | 设计文档（M1 阅读引擎）：重排、EPUB/TXT 解析、块模型、CLI | v1.0 |
 | [CHANGELOG.md](CHANGELOG.md) | 变更记录（文档与实现，自项目启动起） | — |
 
+## 打包与安装（iPad）
+
+未签名 IPA 由 CI 自动产出（D12：免开发者账号，SideStore 侧载）：
+
+1. 下载：仓库 [Releases](https://github.com/Neomelt/cadmus/releases) 里的 `cadmus-unsigned.ipa`（或 Actions 的 `ios` 工作流产出的同名 artifact）
+2. 安装：iPad 上用 [SideStore](https://sidestore.io) 打开该 IPA，以个人 Apple ID 重签安装
+   - 7 天签名到期由 SideStore 自动续签
+   - 免费 Apple ID 最多同时 3 个自签应用
+
 ## 状态
 
-PRD v1.1 · 2026-10-12 · M1 引擎跑通（PDF 重排 / EPUB / TXT / CLI）· CR-1 待人工抽样复核
+PRD v1.2 · 2026-10-12 · M1 引擎跑通（PDF 重排 / EPUB / TXT / CLI）· iOS 未签名 IPA 流水线跑通（SideStore 侧载）· CR-1 待人工抽样复核
