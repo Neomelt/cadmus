@@ -15,6 +15,8 @@
 - crates/cadmus-epub：EPUB 解析（容器/OPF/spine、XHTML→块序列、图片导出）
 - cadmus-cli：reflow/epub 接通（reflow 支持 --dump json 与占位符输出）
 - tests/fixtures：F1–F6 来源说明与合成双栏 PDF 脚本；CI（fmt/clippy/test）
+- cadmus-cli：`--dump html` 预览输出（浏览器直接阅读，含公式/图位图）
+- CI：产出 cadmus-cli Linux 发布产物（Actions artifact）
 
 ### 变更
 - PRODUCT v1.1：设备范围明确（iOS 仅 iPad、手机仅 Android，D11）；FR-2.11 提为 M；补问题④；非目标格式与 DRM；性能基线

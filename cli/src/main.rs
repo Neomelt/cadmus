@@ -11,6 +11,8 @@ use cadmus_epub::{EpubOptions, TxtOptions, parse_epub, parse_txt_bytes};
 use cadmus_reflow::{ReflowOptions, reflow};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
+mod html;
+
 #[derive(Parser)]
 #[command(name = "cadmus-cli", version, about = "cadmus 阅读引擎开发工具（M1）")]
 struct Cli {
@@ -51,6 +53,8 @@ struct ReflowArgs {
 enum ReflowDump {
     Text,
     Json,
+    /// HTML 预览（含公式/图位图，浏览器直接打开）
+    Html,
 }
 
 #[derive(Args)]
@@ -68,6 +72,8 @@ struct EpubArgs {
 enum EpubDump {
     Text,
     Blocks,
+    /// HTML 预览（含图片位图，浏览器直接打开）
+    Html,
 }
 
 #[derive(Args)]
@@ -153,6 +159,15 @@ fn run_reflow(args: &ReflowArgs) -> Result<ExitCode> {
         ReflowDump::Json => {
             println!("{}", document_json(&document));
         }
+        ReflowDump::Html => {
+            let title = args
+                .file
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "cadmus".to_string());
+            let path = html::render(&document, &options.out_dir, &title)?;
+            eprintln!("HTML 预览：{}", path.display());
+        }
     }
 
     Ok(if degraded > 0 {
@@ -225,8 +240,16 @@ fn block_json(block: &Block) -> serde_json::Value {
 }
 
 fn run_epub(args: &EpubArgs) -> Result<ExitCode> {
+    let out_dir = args
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("cadmus-out"));
     let options = EpubOptions {
-        out_dir: args.out.clone(),
+        out_dir: if matches!(args.dump, EpubDump::Html) || args.out.is_some() {
+            Some(out_dir.clone())
+        } else {
+            None
+        },
     };
     let (document, report) = parse_epub(&args.file, &options)?;
     for warning in &report.warnings {
@@ -244,6 +267,19 @@ fn run_epub(args: &EpubArgs) -> Result<ExitCode> {
             for block in &document.blocks {
                 print_block_text(block);
             }
+        }
+        EpubDump::Html => {
+            let title = report
+                .title
+                .clone()
+                .or_else(|| {
+                    args.file
+                        .file_stem()
+                        .map(|stem| stem.to_string_lossy().into_owned())
+                })
+                .unwrap_or_else(|| "cadmus".to_string());
+            let path = html::render(&document, &out_dir, &title)?;
+            eprintln!("HTML 预览：{}", path.display());
         }
         EpubDump::Blocks => {
             for block in &document.blocks {
