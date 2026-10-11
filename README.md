@@ -5,16 +5,17 @@
 一个先把书读好的平板阅读器：小说、教材、论文。本地文件进，舒服的排版、PDF 重排、离线读完；批注一键导出成 Markdown（笔记软件接入为后期可选）。
 
 - 平台：iOS（主）+ Android；Rust 核心 + Tauri 2
-- 差异化：**移动端 PDF 重排 × 本地优先 × 批注回流笔记系统**
+- 差异化：**移动端 PDF 重排 × 本地优先 × 批注开放导出**
 
 ## 文档
 
-| 文档 | 内容 |
-|---|---|
-| [docs/PRODUCT.md](docs/PRODUCT.md) | 产品定义：定位、原则、范围、里程碑、风险 |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 技术方案：选型、结构、重排引擎、同步协议 |
-| [docs/CRITERIA.md](docs/CRITERIA.md) | 验收标准（先于实现注册） |
+| 文档 | 内容 | 版本 |
+|---|---|---|
+| [docs/PRODUCT.md](docs/PRODUCT.md) | 产品需求文档（PRD）：定位、用户、旅程、功能需求、非功能需求、度量、决策记录 | v1.0 |
+| [docs/RESEARCH.md](docs/RESEARCH.md) | 研究附录：竞品格局、生态验证、合规依据、未验证假设 | v1.0 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 技术方案：选型、结构、阅读引擎、批注出口、构建发布 | v0.2 |
+| [docs/CRITERIA.md](docs/CRITERIA.md) | 验收标准（先于实现注册） | v0.2 |
 
 ## 状态
 
-草案 v0.2 · 2026-10-11 · 尚未开始实现（v0.2：定位为阅读器优先，笔记软件接入为第二期）
+PRD v1.0 · 2026-10-11 · 尚未开始实现（下一个里程碑：M1 阅读引擎，见 PRD §9.1）
