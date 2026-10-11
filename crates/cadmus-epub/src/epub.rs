@@ -23,6 +23,10 @@ pub struct EpubOptions {
 pub struct EpubReport {
     pub title: Option<String>,
     pub language: Option<String>,
+    /// 作者（dc:creator）。
+    pub creators: Vec<String>,
+    /// 导出的封面文件路径（未导出时为 None）。
+    pub cover_path: Option<String>,
     pub chapters: usize,
     /// 跳过/降级的警告（CLI 输出到 stderr）。
     pub warnings: Vec<String>,
@@ -53,9 +57,34 @@ pub fn parse_epub_bytes(bytes: &[u8], options: &EpubOptions) -> Result<(Document
     let mut report = EpubReport {
         title: opf.title.clone(),
         language: opf.language.clone(),
+        creators: opf.creators.clone(),
+        cover_path: None,
         chapters: 0,
         warnings: Vec::new(),
     };
+    if let Some(out_dir) = &options.out_dir {
+        std::fs::create_dir_all(out_dir)?;
+    }
+
+    // 封面导出（可选，见 DESIGN-ENGINE §4.3）。
+    if let Some(id) = opf.cover_id.clone()
+        && let Some(item) = opf.manifest.iter().find(|item| item.id == id)
+    {
+        let href = resolve_path(&base_dir, &item.href);
+        match read_bytes(&mut archive, &href) {
+            Ok(data) => {
+                if let Some(out_dir) = &options.out_dir {
+                    let file = out_dir.join(format!("cover{}", extension_of(&href)));
+                    match std::fs::write(&file, data) {
+                        Ok(()) => report.cover_path = Some(file.display().to_string()),
+                        Err(error) => report.warnings.push(format!("封面导出失败：{error}")),
+                    }
+                }
+            }
+            Err(_) => report.warnings.push(format!("封面缺失：{href}")),
+        }
+    }
+
     let mut blocks: Vec<Block> = Vec::new();
     let mut order = 0u32;
 
@@ -206,6 +235,7 @@ mod tests {
     <package xmlns="http://www.idpf.org/2007/opf" version="3.0">
       <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
         <dc:title>测试书</dc:title><dc:language>zh</dc:language>
+        <dc:creator>作者甲</dc:creator>
       </metadata>
       <manifest>
         <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
@@ -243,6 +273,7 @@ mod tests {
         let bytes = build_epub();
         let (document, report) = parse_epub_bytes(&bytes, &EpubOptions::default()).unwrap();
         assert_eq!(document.title.as_deref(), Some("测试书"));
+        assert_eq!(report.creators, vec!["作者甲"]);
         assert_eq!(report.chapters, 1);
         let kinds: Vec<BlockKind> = document.blocks.iter().map(|block| block.kind).collect();
         assert_eq!(

@@ -16,6 +16,8 @@
 - cadmus-cli：reflow/epub 接通（reflow 支持 --dump json 与占位符输出）
 - tests/fixtures：F1–F6 来源说明与合成双栏 PDF 脚本；CI（fmt/clippy/test）
 - cadmus-cli：`--dump html` 预览输出（浏览器直接阅读，含公式/图位图）
+- 预览：阅读器体验升级（主题/字号/行宽/目录/封面作者）
+- cadmus-epub：dc:creator 与封面（EPUB2/3）解析导出
 - CI：产出 cadmus-cli Linux 发布产物（Actions artifact）
 
 ### 变更

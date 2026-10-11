@@ -165,7 +165,12 @@ fn run_reflow(args: &ReflowArgs) -> Result<ExitCode> {
                 .file_stem()
                 .map(|stem| stem.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "cadmus".to_string());
-            let path = html::render(&document, &options.out_dir, &title)?;
+            let meta = html::PreviewMeta {
+                title: &title,
+                byline: None,
+                cover: None,
+            };
+            let path = html::render(&document, &options.out_dir, &meta)?;
             eprintln!("HTML 预览：{}", path.display());
         }
     }
@@ -261,6 +266,14 @@ fn run_epub(args: &EpubArgs) -> Result<ExitCode> {
         document.blocks.len(),
         report.language.as_deref().unwrap_or("未标注")
     );
+    let authors = if report.creators.is_empty() {
+        None
+    } else {
+        Some(report.creators.join("、"))
+    };
+    if let Some(byline) = &authors {
+        eprintln!("作者：{byline}");
+    }
 
     match args.dump {
         EpubDump::Text => {
@@ -278,7 +291,12 @@ fn run_epub(args: &EpubArgs) -> Result<ExitCode> {
                         .map(|stem| stem.to_string_lossy().into_owned())
                 })
                 .unwrap_or_else(|| "cadmus".to_string());
-            let path = html::render(&document, &out_dir, &title)?;
+            let meta = html::PreviewMeta {
+                title: &title,
+                byline: authors.as_deref(),
+                cover: report.cover_path.as_deref(),
+            };
+            let path = html::render(&document, &out_dir, &meta)?;
             eprintln!("HTML 预览：{}", path.display());
         }
         EpubDump::Blocks => {
