@@ -20,4 +20,4 @@
 
 ## 状态
 
-PRD v1.1 · 2026-10-11 · M1 阅读引擎设计评审通过（见 docs/DESIGN-ENGINE.md）· 实现进行中
+PRD v1.1 · 2026-10-12 · M1 引擎跑通（PDF 重排 / EPUB / TXT / CLI）· CR-1 待人工抽样复核

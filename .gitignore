@@ -1,1 +1,6 @@
 /target
+/vendor/
+/cadmus-out/
+/tests/fixtures/*.pdf
+/tests/fixtures/*.epub
+/tests/fixtures/*.txt
