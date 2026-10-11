@@ -1,6 +1,6 @@
 # 技术架构
 
-> 状态：草案 v0.2 · 2026-10-11（v0.2 修订：三类内容管线 PDF/EPUB/TXT；source 层与 syncd 改为二期）
+> 状态：草案 v0.3 · 2026-10-11（v0.3 修订：设备范围对齐——iOS 仅 iPad、Android 平板与手机；批注导出 Markdown 模板；性能基线设备）
 > 产品定义见 `PRODUCT.md`，验收口径见 `CRITERIA.md`。
 > `[待定]` 条目附默认取值。
 
@@ -10,7 +10,7 @@
 
 | 约束 | 来源 | 后果 |
 |---|---|---|
-| 双端发布（iOS 主 + Android） | 产品目标 | UI 方案必须跨端；Rust 只能作为库/Core 出现 |
+| 双端发布（iOS 仅 iPad，主；Android 平板/手机） | 产品目标 | UI 方案必须跨端；Rust 只能作为库/Core 出现 |
 | 开发机为 Linux | 现实 | **iOS 无法本地出包**，必须走 macOS CI（`macos-14+` runner 出 ipa） |
 | 阅读为主场景、离线可用 | 产品原则 | 重排与渲染不能依赖网络 |
 | 长期维护（>3 年） | 目标 | 依赖尽量少；PDF 渲染层隔离成可替换 crate |
@@ -123,6 +123,8 @@ TXT（小说）
 | 5MB TXT 首次分页 | < 1s |
 | EPUB 打开（单章先出） | < 500ms |
 
+> 基线设备：iPad 第 9 代（2021）；Android 中端机（2021 年档，4GB RAM）。
+
 ## 6. source 层（统一接口）
 
 ```rust
@@ -166,6 +168,19 @@ sources(id, kind, config_json, credential_ref)                       -- 源配�
 - 内容：原文引用、书名、进度/页码定位、笔记；
 - 幂等：重复导出靠 `exported_at` 水位去重。
 
+导出文件模板（文件名 `«书名»-高亮.md`；无笔记的条目省略笔记行；位置：PDF 用原书页码，EPUB/TXT 用章节 + 百分比）：
+
+```markdown
+# 《书名》标注
+
+> 高亮原文第一处
+- 位置：第 3 章 · 42% · 原书 p.57
+- 笔记：我的理解……
+
+> 高亮原文第二处
+- 位置：第 4 章 · 55% · 原书 p.80
+```
+
 第二期（局域网同步时）：
 
 - 发现：mDNS `_cadmus._tcp`；失败时手动输 IP:port（**不做账号体系**）。
@@ -179,6 +194,8 @@ sources(id, kind, config_json, credential_ref)                       -- 源配�
 |---|---|---|
 | Android APK | ✅ 直接出包 | 可选 |
 | iOS ipa | ❌ 不可 | GitHub Actions `macos-14+`，`xcodebuild` + Tauri 打包；TestFlight 上传 |
+
+> iOS 包 device family 设为 iPad 专用（不含 iPhone）；Android 包同一代码库覆盖平板与手机。
 
 CI 工作流清单：`ci.yml`（fmt/clippy/test ×core/reflow/epub/source）、`android.yml`、`ios.yml`。
 
