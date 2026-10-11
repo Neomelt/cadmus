@@ -7,12 +7,15 @@
 
 ### 新增
 - CHANGELOG.md
+- DESIGN-ENGINE.md：M1 阅读引擎设计 v1.0（评审通过）
 
 ### 变更
 - PRODUCT v1.1：设备范围明确（iOS 仅 iPad、手机仅 Android，D11）；FR-2.11 提为 M；补问题④；非目标格式与 DRM；性能基线
 - ARCHITECTURE v0.3：设备范围对齐；批注导出模板；性能基线
 - CRITERIA v0.3：CR-1 视口修正；CR-3/4/9 对齐 M2；性能基线
 - README：平台范围与文档版本同步
+- 全文档：去 AI 味（humanizer）：改写破折号衔接句、口号式对比句、装饰性加粗
+- PRODUCT §2.2：陈旧交叉引用修正（调研证据指向 RESEARCH §3）
 
 ## 2026-10-11 · PRD v1.0 + 研究附录
 

@@ -15,8 +15,9 @@
 | [docs/RESEARCH.md](docs/RESEARCH.md) | 研究附录：竞品格局、生态验证、合规依据、未验证假设 | v1.0 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 技术方案：选型、结构、阅读引擎、批注出口、构建发布 | v0.3 |
 | [docs/CRITERIA.md](docs/CRITERIA.md) | 验收标准（先于实现注册） | v0.3 |
+| [docs/DESIGN-ENGINE.md](docs/DESIGN-ENGINE.md) | 设计文档（M1 阅读引擎）：重排、EPUB/TXT 解析、块模型、CLI | v1.0 |
 | [CHANGELOG.md](CHANGELOG.md) | 变更记录（文档与实现，自项目启动起） | — |
 
 ## 状态
 
-PRD v1.1 · 2026-10-11 · 尚未开始实现（下一个里程碑：M1 阅读引擎，见 PRD §9.1）
+PRD v1.1 · 2026-10-11 · M1 阅读引擎设计评审通过（见 docs/DESIGN-ENGINE.md）· 实现进行中
