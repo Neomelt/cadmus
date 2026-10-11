@@ -18,6 +18,7 @@
 - cadmus-cli：`--dump html` 预览输出（浏览器直接阅读，含公式/图位图）
 - 预览：阅读器体验升级（主题/字号/行宽/目录/封面作者）
 - cadmus-epub：dc:creator 与封面（EPUB2/3）解析导出
+- src-tauri：Tauri 2 空壳（iOS 出包链路验证）；ios.yml 产出未签名 IPA（SideStore 侧载用，D12）
 - CI：产出 cadmus-cli Linux 发布产物（Actions artifact）
 
 ### 变更

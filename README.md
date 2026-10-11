@@ -11,7 +11,7 @@
 
 | 文档 | 内容 | 版本 |
 |---|---|---|
-| [docs/PRODUCT.md](docs/PRODUCT.md) | 产品需求文档（PRD）：定位、用户、旅程、功能需求、非功能需求、度量、决策记录 | v1.1 |
+| [docs/PRODUCT.md](docs/PRODUCT.md) | 产品需求文档（PRD）：定位、用户、旅程、功能需求、非功能需求、度量、决策记录 | v1.2 |
 | [docs/RESEARCH.md](docs/RESEARCH.md) | 研究附录：竞品格局、生态验证、合规依据、未验证假设 | v1.0 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 技术方案：选型、结构、阅读引擎、批注出口、构建发布 | v0.3 |
 | [docs/CRITERIA.md](docs/CRITERIA.md) | 验收标准（先于实现注册） | v0.3 |

@@ -1,6 +1,9 @@
 /target
 /vendor/
 /cadmus-out/
+/node_modules/
+/src-tauri/target/
+/src-tauri/gen/
 /tests/fixtures/*.pdf
 /tests/fixtures/*.epub
 /tests/fixtures/*.txt

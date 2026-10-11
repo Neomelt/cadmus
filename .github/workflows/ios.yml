@@ -1,0 +1,64 @@
+name: ios
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [master]
+    paths:
+      - "src-tauri/**"
+      - "ui/**"
+      - "package.json"
+      - ".github/workflows/ios.yml"
+
+jobs:
+  unsigned-ipa:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: install tauri cli
+        run: npm install -g @tauri-apps/cli@^2
+      - name: ios init
+        run: tauri ios init --ci
+      - name: upload generated xcode project
+        uses: actions/upload-artifact@v4
+        with:
+          name: gen-apple
+          path: src-tauri/gen/apple
+          if-no-files-found: warn
+      - name: build unsigned
+        run: |
+          cd src-tauri/gen/apple
+          PROJ=$(ls -d *.xcodeproj | head -1)
+          NAME=${PROJ%.xcodeproj}
+          echo "project=$PROJ scheme=$NAME"
+          xcodebuild -project "$PROJ" -scheme "$NAME" \
+            -configuration release -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+      - name: package ipa
+        run: |
+          APP=$(find src-tauri/gen/apple/build/Build/Products -maxdepth 3 -name '*.app' | head -1)
+          echo "app=$APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry cadmus-unsigned.ipa Payload
+          ls -la cadmus-unsigned.ipa
+      - name: upload ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: cadmus-unsigned-ipa
+          path: cadmus-unsigned.ipa
+          if-no-files-found: error
