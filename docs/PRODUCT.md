@@ -1,4 +1,4 @@
-# 产品文档
+# 产品文档 —— cadmus
 
 > 状态：草案 v0.1 · 2026-10-11
 > 本文是唯一的产品权威来源。技术方案见 `ARCHITECTURE.md`，验收口径见 `CRITERIA.md`。
@@ -122,7 +122,7 @@ GitHub 佐证：Rust 生态中 `pdf reflow` 相关仓库全部为 0★ 停更项
 
 | 阶段 | 目标 | 可验证成果 |
 |---|---|---|
-| M1 · 引擎 | 重排引擎在桌面成立 | CLI：`reader reflow a.pdf` 输出可读单列，双栏论文验收通过（CR-1） |
+| M1 · 引擎 | 重排引擎在桌面成立 | CLI：`cadmus-cli reflow a.pdf` 输出可读单列，双栏论文验收通过（CR-1） |
 | M2 · Android | 真机可读可批注 | 双栏论文在 Android 上连续读完；批注导出 Markdown（CR-2/4/5） |
 | M3 · iOS | iPad 真机 + 还原度 | TestFlight 包；iPad 验收全部通过 |
 | M4 · 同步 | 桌面伴生 + 回流闭环 | 高亮 3 处 → 桌面 Inbox 出现 3 条 Markdown（CR-5） |
@@ -142,7 +142,7 @@ GitHub 佐证：Rust 生态中 `pdf reflow` 相关仓库全部为 0★ 停更项
 
 | # | 事项 | 默认值 |
 |---|---|---|
-| 1 | 产品名 | `[待定]`，仓库名 `reader` |
+| 1 | 产品名 | **cadmus**（已定）：希腊神话中把字母带给希腊的人；寓意"把文本带到新载体"。仓库/co 名 `cadmus` |
 | 2 | 首发平台 | iOS 优先，Android 同步 |
 | 3 | 分发方式 | TestFlight/侧载起步 |
 | 4 | 开源许可 | MIT OR Apache-2.0（不含 GPL 代码时） |

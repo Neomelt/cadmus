@@ -43,7 +43,7 @@
 └─────────────────────────┼─────────────────────────────────────┘
                           │ 局域网 (HTTP, mdns 发现)
 ┌─────────────────────────┼─────────────────────────────────────┐
-│  桌面伴生 reader-syncd (Rust CLI，可选)                        │
+│  桌面伴生 cadmus-syncd (Rust CLI，可选)                        │
 │  ┌──────────────┐  ┌─────────────┐  ┌─────────────────────┐   │
 │  │ 书库索引      │  │ 同步服务     │  │ 批注回流            │   │
 │  │ lunwen/Zotero│  │ 增量传输     │  │ → 知识库 Inbox (.md) │   │
@@ -54,21 +54,21 @@
 ## 4. 里程碑对应的仓库结构
 
 ```
-reader/
+cadmus/
 ├─ Cargo.toml              # workspace
 ├─ crates/
-│  ├─ core/                # 文档模型、锚点、存储（无 UI 依赖，可单测）
-│  ├─ reflow/              # 重排引擎（M1 的验证主体）
-│  ├─ source/              # LocalFile / OPDS / WebDAV（统一 trait）
-│  ├─ syncd/               # 桌面伴生：索引 + 同步 + 回流
-│  └─ app/                 # Tauri 壳（M2 起）
-├─ cli/                    # reader-cli：打开发文档、dump 重排、调试
+│  ├─ cadmus-core/         # 文档模型、锚点、存储（无 UI 依赖，可单测）
+│  ├─ cadmus-reflow/       # 重排引擎（M1 的验证主体）
+│  ├─ cadmus-source/       # LocalFile / OPDS / WebDAV（统一 trait）
+│  ├─ cadmus-syncd/        # 桌面伴生：索引 + 同步 + 回流
+│  └─ cadmus-app/          # Tauri 壳（M2 起）
+├─ cli/                    # cadmus-cli：打开文档、dump 重排、调试
 ├─ ui/                     # Web 前端
 ├─ docs/                   # 本文档集
 └─ .github/workflows/      # android.yml / ios.yml / ci.yml
 ```
 
-依赖方向：`app → source → core ← reflow`；`syncd → core`。`core` 不依赖任何 UI/平台。
+依赖方向：`cadmus-app → cadmus-source → cadmus-core ← cadmus-reflow`；`cadmus-syncd → cadmus-core`。`cadmus-core` 不依赖任何 UI/平台。
 
 ## 5. 重排引擎（差异化核心）
 
@@ -143,7 +143,7 @@ sources(id, kind, config_json, credential_ref)                       -- 源配�
 
 ## 8. 同步协议（M4）
 
-- 发现：mDNS `_reader._tcp`；失败时手动输 IP:port（**不做账号体系**）。
+- 发现：mDNS `_cadmus._tcp`；失败时手动输 IP:port（**不做账号体系**）。
 - 传输：HTTP/1.1 + JSON + 文件流；增量以 `doc hash + block_id` 对齐两端。
 - 批注回流（核心链路）：
   1. App 端生成批注记录（原文引用、note、anchor、页码）；
