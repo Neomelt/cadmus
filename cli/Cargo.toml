@@ -1,0 +1,11 @@
+[package]
+name = "cadmus-cli"
+description = "cadmus 阅读引擎开发工具（M1）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cadmus-core = { path = "../crates/cadmus-core" }
+cadmus-epub = { path = "../crates/cadmus-epub" }
+clap = { version = "4", features = ["derive"] }
