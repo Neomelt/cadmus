@@ -29,8 +29,10 @@ impl TextLine {
             if let Some(prev) = previous {
                 let gap = glyph.x - (prev.x + prev.w);
                 let ascii_side = prev.ch.is_ascii() || glyph.ch.is_ascii();
+                let both_digits = prev.ch.is_ascii_digit() && glyph.ch.is_ascii_digit();
                 let needs_space = gap > 0.2 * self.size
                     && ascii_side
+                    && !both_digits
                     && !prev.ch.is_whitespace()
                     && !glyph.ch.is_whitespace();
                 if needs_space {
@@ -56,17 +58,21 @@ pub fn build_lines(glyphs: &[GlyphBox]) -> Vec<TextLine> {
             .then(a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal))
     });
 
-    // ① 垂直中心聚类。
+    // ① 垂直中心聚类（同时跟踪基线，收留逗号/句点等贴基线的小字形）。
     let mut rows: Vec<Vec<&GlyphBox>> = Vec::new();
     let mut centers: Vec<f32> = Vec::new();
+    let mut baselines: Vec<f32> = Vec::new();
     let mut heights: Vec<f32> = Vec::new();
     for glyph in sorted {
         let center = glyph.y + glyph.h / 2.0;
+        let baseline = glyph.y + glyph.h;
         if let Some(index) = rows.len().checked_sub(1)
-            && (center - centers[index]).abs() <= 0.45 * heights[index] + 1.5
+            && ((center - centers[index]).abs() <= 0.45 * heights[index] + 1.5
+                || (baseline - baselines[index]).abs() <= 1.5)
         {
             let count = rows[index].len() as f32;
             centers[index] = (centers[index] * count + center) / (count + 1.0);
+            baselines[index] = (baselines[index] * count + baseline) / (count + 1.0);
             let clamped = glyph.h.min(1.8 * heights[index]);
             heights[index] = (heights[index] * count + clamped) / (count + 1.0);
             rows[index].push(glyph);
@@ -74,6 +80,7 @@ pub fn build_lines(glyphs: &[GlyphBox]) -> Vec<TextLine> {
         }
         rows.push(vec![glyph]);
         centers.push(center);
+        baselines.push(baseline);
         heights.push(glyph.h);
     }
 
