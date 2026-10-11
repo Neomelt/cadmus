@@ -1,6 +1,6 @@
 # 技术架构
 
-> 状态：草案 v0.1 · 2026-10-11
+> 状态：草案 v0.2 · 2026-10-11（v0.2 修订：三类内容管线 PDF/EPUB/TXT；source 层与 syncd 改为二期）
 > 产品定义见 `PRODUCT.md`，验收口径见 `CRITERIA.md`。
 > `[待定]` 条目附默认取值。
 
@@ -34,22 +34,26 @@
 ```
 ┌─ iPad / Android ──────────────────────────────────────────────┐
 │  App (Tauri 2)                                                │
-│  ┌────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
-│  │ UI (Web)   │◄►│ 核心 (Rust)   │◄►│ 存储 (SQLite)         │   │
-│  │ 阅读视图    │  │ 重排引擎      │  │ 文档/锚点/批注/缓存    │   │
-│  │ 目录/标注   │  │ source 层    │  └──────────────────────┘   │
-│  │ 设置       │  │ 同步客户端    │                             │
-│  └────────────┘  └──────┬───────┘                             │
-└─────────────────────────┼─────────────────────────────────────┘
-                          │ 局域网 (HTTP, mdns 发现)
-┌─────────────────────────┼─────────────────────────────────────┐
-│  桌面伴生 cadmus-syncd (Rust CLI，可选)                        │
+│  ┌────────────┐  ┌──────────────────┐  ┌──────────────────┐   │
+│  │ UI (Web)   │◄►│ 核心 (Rust)       │◄►│ 存储 (SQLite)     │   │
+│  │ 阅读视图    │  │ 文本引擎 (EPUB/  │  │ 文档/锚点/批注    │   │
+│  │ 目录/标注   │  │          TXT)    │  │ /缓存             │   │
+│  │ 设置       │  │ 重排引擎 (PDF)    │  └──────────────────┘   │
+│  └────────────┘  │ 导入/分享接收     │                         │
+│                  │ source 层 (二期)  │                         │
+│                  └────────┬─────────┘                         │
+└───────────────────────────┼───────────────────────────────────┘
+                            │ 局域网 (HTTP, mdns 发现) —— 二期
+┌───────────────────────────┼───────────────────────────────────┐
+│  桌面伴生 cadmus-syncd (Rust CLI，第二期)                      │
 │  ┌──────────────┐  ┌─────────────┐  ┌─────────────────────┐   │
-│  │ 书库索引      │  │ 同步服务     │  │ 批注回流            │   │
-│  │ lunwen/Zotero│  │ 增量传输     │  │ → 知识库 Inbox (.md) │   │
+│  │ 书库索引      │  │ 同步服务     │  │ 批注出口            │   │
+│  │ 本地目录      │  │ 增量传输     │  │ → Markdown          │   │
 │  └──────────────┘  └─────────────┘  └─────────────────────┘   │
 └───────────────────────────────────────────────────────────────┘
 ```
+
+第一期不依赖右侧任何组件：**App 单机可完成全部第一期功能**。
 
 ## 4. 里程碑对应的仓库结构
 
@@ -58,43 +62,54 @@ cadmus/
 ├─ Cargo.toml              # workspace
 ├─ crates/
 │  ├─ cadmus-core/         # 文档模型、锚点、存储（无 UI 依赖，可单测）
-│  ├─ cadmus-reflow/       # 重排引擎（M1 的验证主体）
-│  ├─ cadmus-source/       # LocalFile / OPDS / WebDAV（统一 trait）
-│  ├─ cadmus-syncd/        # 桌面伴生：索引 + 同步 + 回流
+│  ├─ cadmus-reflow/       # PDF 重排：布局分析 + 阅读顺序重建（M1 验证主体）
+│  ├─ cadmus-epub/         # EPUB/TXT：解析与分章（M1 验证主体）
+│  ├─ cadmus-source/       # LocalFile（一期）/ OPDS / WebDAV（二期）
+│  ├─ cadmus-syncd/        # 桌面伴生：索引 + 同步 + 批注出口（二期）
 │  └─ cadmus-app/          # Tauri 壳（M2 起）
-├─ cli/                    # cadmus-cli：打开文档、dump 重排、调试
+├─ cli/                    # cadmus-cli：打开文档、dump 重排/解析、调试
 ├─ ui/                     # Web 前端
 ├─ docs/                   # 本文档集
 └─ .github/workflows/      # android.yml / ios.yml / ci.yml
 ```
 
-依赖方向：`cadmus-app → cadmus-source → cadmus-core ← cadmus-reflow`；`cadmus-syncd → cadmus-core`。`cadmus-core` 不依赖任何 UI/平台。
+依赖方向：`cadmus-app → cadmus-source → cadmus-core ← {cadmus-reflow, cadmus-epub}`；`cadmus-syncd → cadmus-core`。`cadmus-core` 不依赖任何 UI/平台。
 
-## 5. 重排引擎（差异化核心）
+## 5. 阅读引擎
 
-### 5.1 管线
+### 5.1 文档处理管线（三类内容）
 
 ```
-PDF 文件
+PDF（论文/教材）
   → [parse]   文本对象：字形 + 坐标 + 字号 + 旋转 + 字体
   → [blocks]  几何聚类：行 → 段落；空白切割；缩进/字号启发
               → 分栏检测（x 投影谷 / 聚类）
   → [regions] 区域分类：正文 / 标题 / 图 / 表 / 公式 / 代码 / 边注
   → [order]   阅读顺序重建（栏序 + 标题层级校正）
   → [atomic]  原子块保护：图/表/公式/代码整块保留，不拆行
-  → [render]  每块：文本块交付 WebView 排版；非文本块栅格化为位图（按块裁剪）
+
+EPUB（小说/教材）
+  → [parse]   container/spine 解析 → XHTML 章节（不重排：原生可重排）
+
+TXT（小说）
+  → [parse]   编码探测（GB18030/UTF-8/Big5 等）→ 章节切分（卷/章正则）
+
+  → [render]  三类统一收敛为块序列：
+              · 文本块 → 交付 WebView 风格化渲染（CSS 卷动/分页）
+              · 非文本块 → 栅格化为位图，按块尺寸随文流动
 ```
 
 ### 5.2 关键设计决策
 
 | 决策 | 内容 |
 |---|---|
-| 重排发生在打开时 | 首次打开生成块序列并缓存；后续直接读缓存 |
-| 文本块以"语义内容"呈现 | 输出的不是坐标，而是带结构的文本（段落/标题），由 WebView 重排 |
+| 打开时构建块序列 | 首次打开生成并缓存；后续直接读缓存 |
+| 文本块以"语义内容"呈现 | 输出的不是坐标，而是带结构的文本（段落/标题），由 WebView 排版 |
 | 非文本块以"块位图"呈现 | 图/公式/表格不参与文字流向，按尺寸随文流动，保证语义完整 |
-| 锚点 = 语义位置 | `anchor = (block_id, char_offset)`；block_id 稳定绑定原页坐标。字号变化/旋转不影响锚点 |
-| 回映射 | 每块携带 `page_range`，锚点可回推原页（用于批注导出、与桌面端互通） |
-| 错误可容错 | 单页布局分析失败 → 该页降级为整页位图，其余照常 |
+| EPUB/TXT 全量交付 WebView | 不做二次重排；排版参数由 CSS 变量驱动（字号/行宽/行距/主题） |
+| 锚点 = 语义位置 | `anchor = (block_id, char_offset)`；block_id 稳定绑定原页坐标（PDF）或章节位置（EPUB/TXT）。字号/旋转/重启不影响锚点 |
+| 回映射 | PDF 每块携带 `page_range`，锚点可回推原页；EPUB/TXT 回映射到章节与百分比进度 |
+| 错误可容错 | 单页布局分析失败 → 该页降级为整页位图；单章解析失败 → 跳过并标记 |
 
 ### 5.3 性能预算（必须实测）
 
@@ -105,6 +120,8 @@ PDF 文件
 | 滚动 | 60fps |
 | 内存（单文档） | < 150MB |
 | 重排可取消 | 切书/关闭时立即取消 |
+| 5MB TXT 首次分页 | < 1s |
+| EPUB 打开（单章先出） | < 500ms |
 
 ## 6. source 层（统一接口）
 
@@ -119,12 +136,12 @@ trait Source {
 
 实现：
 
-| 实现 | 第一期 | 说明 |
+| 实现 | 一期 | 说明 |
 |---|---|---|
-| LocalFile | ✅ | 系统文件 / 隔空投送 / 文件共享 |
-| WebDAV | ✅ | 指向自建库；离线缓存策略见下 |
-| OPDS | ✅ | 标准目录协议（Gutenberg、Standard Ebooks、Calibre 服务器等） |
-| RuleBased | 第二期 | 声明式规则（selector/JSONPath/正则/分页模板）；**不执行任意代码**；不预置任何源 |
+| LocalFile | ✅ | 系统文件 / 隔空投送 / 分享导入 |
+| OPDS | 第二期 | 标准目录协议（Gutenberg、Standard Ebooks、Calibre 服务器等） |
+| WebDAV | 第二期 | 指向自建库；离线缓存策略见下 |
+| RuleBased | 第二期之后 | 声明式规则（selector/JSONPath/正则/分页模板）；**不执行任意代码**；不预置任何源 |
 
 缓存策略：source 只负责取回原始文件；阅读与重排面向本地缓存副本，保证离线可读、断点续传。
 
@@ -132,23 +149,28 @@ trait Source {
 
 ```
 documents(id, hash, path, kind, title, meta_json, imported_at, last_read_at)
-blocks(doc_id, block_id, kind, page_range, payload, order_key)      -- 重排缓存
+blocks(doc_id, block_id, kind, page_range, payload, order_key)      -- PDF: 重排缓存; EPUB/TXT: 解析产物
 positions(doc_id, anchor_block, anchor_offset, updated_at)          -- 阅读位置
 annotations(id, doc_id, anchor_block, anchor_offset, text, note,
             color, created_at, exported_at)                          -- 批注
-sources(id, kind, config_json, credential_ref)                       -- 源配置
+sources(id, kind, config_json, credential_ref)                       -- 源配置（第二期）
 ```
 
-原则：`annotations` 是本地唯一事实来源；导出（Markdown/回流）是幂等投影，`exported_at` 记录水位。
+原则：`annotations` 是本地唯一事实来源；导出是幂等投影，`exported_at` 记录水位；Markdown 是唯一交换格式（不承诺任何笔记软件的专有格式）。
 
-## 8. 同步协议（M4）
+## 8. 批注出口（第一期：导出；第二期：局域网同步）
+
+第一期（App 自足）：
+
+- 导出方式：系统分享面板 + 文件导出（Markdown），不依赖任何网络组件；
+- 内容：原文引用、书名、进度/页码定位、笔记；
+- 幂等：重复导出靠 `exported_at` 水位去重。
+
+第二期（局域网同步时）：
 
 - 发现：mDNS `_cadmus._tcp`；失败时手动输 IP:port（**不做账号体系**）。
 - 传输：HTTP/1.1 + JSON + 文件流；增量以 `doc hash + block_id` 对齐两端。
-- 批注回流（核心链路）：
-  1. App 端生成批注记录（原文引用、note、anchor、页码）；
-  2. `syncd` 接收后渲染为 Markdown，写入 `知识库/00 Inbox/`，文件名 `«书名»-高亮.md` 追加式；
-  3. 冲突：以 App 端为主（唯一写者原则在 App 侧），`syncd` 只追加不修改。
+- 链路：App 端生成批注记录 → `syncd` 渲染 Markdown 写入导出目录（如 Obsidian 仓库），文件名 `«书名»-高亮.md` 追加式；冲突以 App 端为主，`syncd` 只追加不修改。
 - 失败处理：静默重试 + 指数退避；阅读界面零提示。
 
 ## 9. 构建与发布
@@ -158,7 +180,7 @@ sources(id, kind, config_json, credential_ref)                       -- 源配�
 | Android APK | ✅ 直接出包 | 可选 |
 | iOS ipa | ❌ 不可 | GitHub Actions `macos-14+`，`xcodebuild` + Tauri 打包；TestFlight 上传 |
 
-CI 工作流清单：`ci.yml`（fmt/clippy/test ×core/reflow/source）、`android.yml`、`ios.yml`。
+CI 工作流清单：`ci.yml`（fmt/clippy/test ×core/reflow/epub/source）、`android.yml`、`ios.yml`。
 
 ## 10. 开放问题
 
@@ -166,6 +188,7 @@ CI 工作流清单：`ci.yml`（fmt/clippy/test ×core/reflow/source）、`andro
 |---|---|---|
 | 1 | UI 框架（Svelte vs 原生 TS） | Svelte 5 |
 | 2 | pdfium 分发方式（预编译 vs 源码构建） | 预编译 + 每平台校验 |
-| 3 | 桌面端 UI（是否需要，还是纯 CLI） | 纯 CLI + 本地 web 状态页 |
+| 3 | 桌面端形态（纯 CLI 还是带状态页） | 纯 CLI + 本地 web 状态页 |
 | 4 | 云同步（跨 iPad/手机） | 不做，局域网足够 |
-| 5 | 是否收录 EPUB（第二期） | 是 |
+| 5 | TXT 编码探测（GB18030/UTF-8/Big5） | charset 探测 + 手动覆盖入口 |
+| 6 | 分页模式（左右翻页）vs 滚动 | 小说默认滚动；教材/论文以滚动为主，分页作为可选 |
