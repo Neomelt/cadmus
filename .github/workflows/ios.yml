@@ -36,6 +36,12 @@ jobs:
           name: gen-apple
           path: src-tauri/gen/apple
           if-no-files-found: warn
+      - name: link tauri cli for xcode script phase
+        run: |
+          CLI_JS="$(npm root -g)/@tauri-apps/cli/tauri.js"
+          ls -la "$CLI_JS"
+          printf 'require("%s");\n' "$CLI_JS" > src-tauri/gen/apple/tauri
+          cat src-tauri/gen/apple/tauri
       - name: build unsigned
         run: |
           cd src-tauri/gen/apple
