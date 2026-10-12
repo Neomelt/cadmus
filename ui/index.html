@@ -24,6 +24,15 @@
     background: transparent; color: CanvasText;
   }
   .topbar button.primary { border-color: transparent; background: CanvasText; color: Canvas; }
+  #sort-mode {
+    font: inherit; font-size: .82rem; padding: .38rem .5rem; border-radius: 10px;
+    border: 1px solid rgba(127, 127, 127, .35); background: Canvas; color: CanvasText;
+  }
+  #shelf-search {
+    width: 100%; margin: 0 0 1.1rem; font: inherit; font-size: .9rem;
+    padding: .5rem .75rem; border-radius: 10px;
+    border: 1px solid rgba(127, 127, 127, .35); background: Canvas; color: CanvasText;
+  }
   .section-title { font-size: .78rem; letter-spacing: .14em; opacity: .5; margin: 0 0 .7rem; }
   .books { display: grid; gap: .8rem; }
   .book {
@@ -102,6 +111,39 @@
     color: #d9534f; background: transparent; border: 0; cursor: pointer; padding: .15rem .3rem;
   }
   .ann-empty { font-size: .85rem; opacity: .5; padding: 1rem 0; }
+  #btn-search {
+    position: fixed; z-index: 10;
+    top: max(.6rem, env(safe-area-inset-top)); right: max(6rem, calc(env(safe-area-inset-right) + 5.6rem));
+    display: none; padding: .45rem .85rem; border-radius: 999px;
+    border: 1px solid rgba(127, 127, 127, .35);
+    background: Canvas; color: CanvasText; font: inherit; font-size: .85rem; cursor: pointer;
+  }
+  #btn-search.open { display: inline-flex; }
+  #search-bar {
+    position: fixed; z-index: 15;
+    top: max(3.2rem, calc(env(safe-area-inset-top) + 2.7rem));
+    left: 50%; transform: translateX(-50%);
+    width: min(92vw, 30rem); display: none;
+  }
+  #search-bar.open { display: block; }
+  #search-bar input {
+    width: 100%; font: inherit; font-size: .95rem; padding: .55rem .8rem;
+    border-radius: 10px; border: 1px solid rgba(127, 127, 127, .4);
+    background: Canvas; color: CanvasText;
+  }
+  #search-results {
+    margin-top: .5rem; max-height: 46vh; overflow: auto;
+    border-radius: 12px; background: Canvas;
+    border: 1px solid rgba(127, 127, 127, .28); display: none;
+  }
+  #search-results.open { display: block; }
+  .hit {
+    padding: .6rem .8rem; font-size: .88rem; line-height: 1.5; cursor: pointer;
+    border-bottom: 1px solid rgba(127, 127, 127, .14);
+  }
+  .hit:last-child { border-bottom: 0; }
+  .hit .excerpt { opacity: .85; }
+  .hit .badge { float: right; font-size: .72rem; opacity: .45; margin-left: .6rem; }
   .ann-sub { margin-top: 1.3rem; }
   .ann-export {
     margin-top: 1.4rem; width: 100%; font: inherit; font-size: .9rem;
@@ -129,9 +171,15 @@
   <div class="topbar">
     <div class="brand"><span class="alpha">α</span><h1>cadmus</h1></div>
     <span class="spacer"></span>
+    <select id="sort-mode" title="排序">
+      <option value="recent">最近阅读</option>
+      <option value="added">导入时间</option>
+      <option value="title">标题</option>
+    </select>
     <button id="btn-manage">管理</button>
     <button id="btn-import" class="primary">导入</button>
   </div>
+  <input id="shelf-search" type="search" placeholder="搜索书库（书名 / 作者）">
   <p class="section-title">书库</p>
   <div class="books" id="books"></div>
   <p class="hint">
@@ -146,6 +194,11 @@
 </div>
 <button id="back">‹ 书库</button>
 <button id="btn-ann">标注</button>
+<button id="btn-search">搜索</button>
+<div id="search-bar">
+  <input id="search-input" type="search" placeholder="搜索本书…">
+  <div id="search-results"></div>
+</div>
 <aside id="ann-panel">
   <h3>标注</h3>
   <div class="ann-filter" id="ann-filter"></div>
@@ -175,6 +228,11 @@
     const toast = document.getElementById('toast');
     let current = null;
     let saveTimer = null;
+    let shelfQuery = '';
+    let sortMode = 'recent';
+    try {
+      sortMode = localStorage.getItem('cadmus-sort') || 'recent';
+    } catch (error) {}
 
     function showToast(text) {
       toast.textContent = text;
@@ -190,8 +248,31 @@
 
     async function refresh() {
       try {
-        const list = await invoke('list_books');
+        let list = await invoke('list_books');
+        const query = (shelfQuery || '').trim().toLowerCase();
+        if (query) {
+          list = list.filter(function (book) {
+            return (book.title || '').toLowerCase().indexOf(query) >= 0 ||
+              (book.author || '').toLowerCase().indexOf(query) >= 0;
+          });
+        }
+        if (sortMode === 'recent') {
+          list.sort(function (a, b) {
+            return (b.last_read_at || 0) - (a.last_read_at || 0) || b.added_at - a.added_at;
+          });
+        } else if (sortMode === 'added') {
+          list.sort(function (a, b) { return b.added_at - a.added_at; });
+        } else {
+          list.sort(function (a, b) { return (a.title || '').localeCompare(b.title || '', 'zh'); });
+        }
         booksEl.innerHTML = '';
+        if (list.length === 0 && query) {
+          const empty = document.createElement('p');
+          empty.className = 'hint';
+          empty.textContent = '没有匹配「' + query + '」的书';
+          booksEl.appendChild(empty);
+          return;
+        }
         list.forEach(function (book) {
           const card = document.createElement('div');
           card.className = 'book';
@@ -248,6 +329,8 @@
       reader.classList.add('open');
       back.classList.add('open');
       btnAnn.classList.add('open');
+      btnSearch.classList.add('open');
+      closeSearch(true);
       loading.style.display = 'block';
       loading.textContent = format === 'pdf' ? '正在排版…（首次打开需要重排）' : '正在打开…';
       frame.hidden = true;
@@ -277,12 +360,34 @@
       }
     }
 
+    function readingAnchor() {
+      try {
+        const win = frame.contentWindow;
+        const blocks = win.document.querySelectorAll('[data-block]');
+        for (let i = 0; i < blocks.length; i++) {
+          const rect = blocks[i].getBoundingClientRect();
+          if (rect.bottom > 8) {
+            const height = rect.height || 1;
+            const ratio = Math.min(1, Math.max(0, -rect.top / height));
+            return { blockId: blocks[i].dataset.block, ratio: ratio };
+          }
+        }
+      } catch (error) {}
+      return null;
+    }
+
     async function saveProgress() {
       if (!current) return;
       const progress = readingProgress();
       if (progress === null) return;
+      const anchor = readingAnchor();
       try {
-        await invoke('save_progress', { id: current, progress: progress });
+        await invoke('save_progress', {
+          id: current,
+          progress: progress,
+          anchorBlock: anchor ? anchor.blockId : null,
+          anchorOffset: anchor ? anchor.ratio : null
+        });
       } catch (error) {}
     }
 
@@ -290,8 +395,18 @@
       try {
         const list = await invoke('list_books');
         const book = list.find(function (item) { return item.id === current; });
-        if (!book || !book.progress) return;
+        if (!book) return;
         const win = frame.contentWindow;
+        // 语义锚点优先（字号/行宽变化后位置不漂移，CR-3）。
+        if (book.anchor_block) {
+          const el = win.document.querySelector('[data-block="' + book.anchor_block + '"]');
+          if (el) {
+            const rect = el.getBoundingClientRect();
+            win.scrollTo(0, rect.top + win.scrollY + (book.anchor_offset || 0) * rect.height);
+            return;
+          }
+        }
+        if (!book.progress) return;
         const max = win.document.documentElement.scrollHeight - win.innerHeight;
         if (max > 0) win.scrollTo(0, book.progress * max);
       } catch (error) {}
@@ -304,6 +419,8 @@
       reader.classList.remove('open');
       back.classList.remove('open');
       btnAnn.classList.remove('open');
+      btnSearch.classList.remove('open');
+      closeSearch(true);
       toggleAnnPanel(false);
       annotations = [];
       frame.srcdoc = '';
@@ -565,6 +682,83 @@
           showToast('删除失败：' + error);
         }
       }
+    });
+
+    // ---- 搜索 ----
+    const searchBar = document.getElementById('search-bar');
+    const searchInput = document.getElementById('search-input');
+    const searchResults = document.getElementById('search-results');
+    const btnSearch = document.getElementById('btn-search');
+    let searchTimer = null;
+
+    function closeSearch(clearInput) {
+      searchBar.classList.remove('open');
+      searchResults.classList.remove('open');
+      if (clearInput) searchInput.value = '';
+    }
+
+    btnSearch.addEventListener('click', function () {
+      const open = searchBar.classList.toggle('open');
+      if (open) searchInput.focus();
+    });
+
+    searchInput.addEventListener('input', function () {
+      if (searchTimer) clearTimeout(searchTimer);
+      const query = searchInput.value.trim();
+      if (!query) {
+        searchResults.classList.remove('open');
+        searchResults.innerHTML = '';
+        return;
+      }
+      searchTimer = setTimeout(async function () {
+        try {
+          const hits = await invoke('search_book', { id: current, query: query });
+          searchResults.innerHTML = '';
+          if (hits.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'hit';
+            empty.textContent = '没有找到「' + query + '」';
+            searchResults.appendChild(empty);
+          } else {
+            hits.forEach(function (hit) {
+              const row = document.createElement('div');
+              row.className = 'hit';
+              const badge = document.createElement('span');
+              badge.className = 'badge';
+              badge.textContent = '#' + (hit.order + 1);
+              row.appendChild(badge);
+              const excerpt = document.createElement('span');
+              excerpt.className = 'excerpt';
+              excerpt.textContent = hit.excerpt;
+              row.appendChild(excerpt);
+              row.addEventListener('click', function () {
+                try {
+                  frame.contentWindow.postMessage({ type: 'cadmus:jump', blockId: hit.block_id }, '*');
+                } catch (error) {}
+                closeSearch(false);
+              });
+              searchResults.appendChild(row);
+            });
+          }
+          searchResults.classList.add('open');
+        } catch (error) {
+          showToast('搜索失败：' + error);
+        }
+      }, 250);
+    });
+
+    // ---- 书库排序与筛选 ----
+    const sortSelect = document.getElementById('sort-mode');
+    sortSelect.value = sortMode;
+    sortSelect.addEventListener('change', function () {
+      sortMode = this.value;
+      try { localStorage.setItem('cadmus-sort', sortMode); } catch (error) {}
+      refresh();
+    });
+    const shelfSearchInput = document.getElementById('shelf-search');
+    shelfSearchInput.addEventListener('input', function () {
+      shelfQuery = this.value;
+      refresh();
     });
 
     refresh();

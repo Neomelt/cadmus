@@ -1,7 +1,12 @@
 //! PDF → 字形/图像对象（DESIGN-ENGINE §4.2 parse）。
 
+use std::sync::OnceLock;
+
 use cadmus_core::{Cancel, Error, Result};
 use pdfium_render::prelude::*;
+
+/// 全局唯一的 pdfium 绑定：库加载只允许一次（重复初始化会报 AlreadyInitialized）。
+static PDFIUM: OnceLock<std::result::Result<Pdfium, String>> = OnceLock::new();
 
 /// 字形框（左上原点，单位 pt）。
 #[derive(Debug, Clone)]
@@ -33,24 +38,29 @@ pub struct RawPage {
     pub images: Vec<Rect>,
 }
 
-/// 绑定 pdfium 动态库。
+/// 绑定 pdfium 动态库（全局初始化一次，重复调用返回同一实例）。
 ///
 /// 顺序：`CADMUS_PDFIUM_LIB` 环境变量（目录）> `vendor/pdfium/lib` > 应用包内（iOS）> 系统库。
-pub fn bind_pdfium() -> Result<Pdfium> {
-    let bindings = if let Ok(dir) = std::env::var("CADMUS_PDFIUM_LIB") {
-        Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(&dir))
-    } else if std::path::Path::new("vendor/pdfium/lib").exists() {
-        Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(
-            "vendor/pdfium/lib",
-        ))
-    } else if let Some(path) = bundled_pdfium() {
-        Pdfium::bind_to_library(path)
-    } else {
-        Pdfium::bind_to_system_library()
-    };
-    bindings
-        .map(Pdfium::new)
-        .map_err(|error| Error::Unsupported(format!("pdfium 加载失败：{error}")))
+pub fn bind_pdfium() -> std::result::Result<&'static Pdfium, String> {
+    PDFIUM
+        .get_or_init(|| {
+            let bindings = if let Ok(dir) = std::env::var("CADMUS_PDFIUM_LIB") {
+                Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(&dir))
+            } else if std::path::Path::new("vendor/pdfium/lib").exists() {
+                Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(
+                    "vendor/pdfium/lib",
+                ))
+            } else if let Some(path) = bundled_pdfium() {
+                Pdfium::bind_to_library(path)
+            } else {
+                Pdfium::bind_to_system_library()
+            };
+            bindings
+                .map(Pdfium::new)
+                .map_err(|error| format!("pdfium 加载失败：{error}"))
+        })
+        .as_ref()
+        .map_err(|error| error.clone())
 }
 
 /// iOS：应用包内 `Frameworks/libpdfium.dylib`（构建流水线注入）。

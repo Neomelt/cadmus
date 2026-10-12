@@ -43,12 +43,28 @@ impl ReflowOptions {
     }
 }
 
+/// 读取 PDF 元数据（标题/作者）。无 pdfium 或读取失败返回 `None`（调用方回退文件名）。
+pub fn pdf_metadata(path: &Path) -> Option<(Option<String>, Option<String>)> {
+    let pdfium = parse::bind_pdfium().ok()?;
+    let document = pdfium.load_pdf_from_file(path, None).ok()?;
+    let metadata = document.metadata();
+    let title = metadata
+        .get(pdfium_render::prelude::PdfDocumentMetadataTagType::Title)
+        .map(|tag| tag.value().trim().to_string())
+        .filter(|value| !value.is_empty());
+    let author = metadata
+        .get(pdfium_render::prelude::PdfDocumentMetadataTagType::Author)
+        .map(|tag| tag.value().trim().to_string())
+        .filter(|value| !value.is_empty());
+    Some((title, author))
+}
+
 /// 将 PDF 重排为块序列。
 pub fn reflow(path: &Path, options: &ReflowOptions, cancel: &Cancel) -> Result<Document> {
     let doc_hash = content_hash(&std::fs::read(path)?);
     std::fs::create_dir_all(&options.out_dir)?;
 
-    let pdfium = parse::bind_pdfium()?;
+    let pdfium = parse::bind_pdfium().map_err(Error::Unsupported)?;
     let document = pdfium
         .load_pdf_from_file(path, None)
         .map_err(|error| Error::Parse(format!("PDF 打开失败：{error}")))?;

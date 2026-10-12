@@ -46,6 +46,7 @@ const HEAD: &str = r#"<!doctype html>
 const STYLE: &str = r#"<style>
 :root {
   --fs: 18px; --lh: 1.7; --width: 40rem;
+  --pad: 1.25rem; --align: left;
   --font: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", Georgia, serif;
   --bg: #ffffff; --fg: #1a1a1a; --muted: #8a8a8a; --soft: rgba(127,127,127,.14);
 }
@@ -68,8 +69,9 @@ body { background: var(--bg); color: var(--fg); }
 }
 .toolbar .title { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 main {
-  margin: 0 auto; padding: 2rem 1.25rem 5rem; max-width: var(--width);
+  margin: 0 auto; padding: 2rem var(--pad) 5rem; max-width: var(--width);
   font-family: var(--font); font-size: var(--fs); line-height: var(--lh);
+  text-align: var(--align);
 }
 main h1 { font-size: 1.5em; } main h2 { font-size: 1.25em; }
 p { margin: .9em 0; }
@@ -166,7 +168,7 @@ const SCRIPT: &str = r#"<script>
     sans: '-apple-system, "PingFang SC", "Noto Sans CJK SC", "Helvetica Neue", sans-serif',
     kai: '"Kaiti SC", "STKaiti", "KaiTi", "AR PL UKai CN", serif'
   };
-  var defaults = { fs: 18, lh: 1.7, width: 40, font: 'serif', theme: 'day' };
+  var defaults = { fs: 18, lh: 1.7, width: 40, margin: 1.25, font: 'serif', theme: 'day', align: 'left' };
   var settings = {};
   for (var key in defaults) settings[key] = defaults[key];
   try {
@@ -181,16 +183,21 @@ const SCRIPT: &str = r#"<script>
     root.style.setProperty('--fs', settings.fs + 'px');
     root.style.setProperty('--lh', settings.lh);
     root.style.setProperty('--width', settings.width + 'rem');
+    root.style.setProperty('--pad', settings.margin + 'rem');
+    root.style.setProperty('--align', settings.align === 'justify' ? 'justify' : 'left');
     root.style.setProperty('--font', FONTS[settings.font] || FONTS.serif);
     body.setAttribute('data-theme', settings.theme);
     document.getElementById('s-fs').value = settings.fs;
     document.getElementById('s-lh').value = settings.lh;
     document.getElementById('s-width').value = settings.width;
+    document.getElementById('s-margin').value = settings.margin;
     document.getElementById('v-fs').textContent = settings.fs + 'px';
     document.getElementById('v-lh').textContent = settings.lh.toFixed(2);
     document.getElementById('v-width').textContent = settings.width + 'rem';
+    document.getElementById('v-margin').textContent = settings.margin + 'rem';
     markChips('c-font', 'font');
     markChips('c-theme', 'theme');
+    markChips('c-align', 'align');
     persist();
   }
   function markChips(id, key) {
@@ -213,9 +220,11 @@ const SCRIPT: &str = r#"<script>
   document.getElementById('s-fs').addEventListener('input', function () { settings.fs = +this.value; apply(); });
   document.getElementById('s-lh').addEventListener('input', function () { settings.lh = +this.value; apply(); });
   document.getElementById('s-width').addEventListener('input', function () { settings.width = +this.value; apply(); });
+  document.getElementById('s-margin').addEventListener('input', function () { settings.margin = +this.value; apply(); });
 
   buildChips('c-font', [['serif', '宋体'], ['sans', '黑体'], ['kai', '楷体']], 'font');
   buildChips('c-theme', [['day', '日间'], ['sepia', '米黄'], ['green', '护眼'], ['night', '深灰'], ['black', '纯黑']], 'theme');
+  buildChips('c-align', [['left', '左对齐'], ['justify', '两端对齐']], 'align');
 
   var scrim = document.getElementById('scrim');
   function closeAll() {
@@ -501,6 +510,10 @@ pub fn render_to_string(
     html.push_str("<div class=\"srow\"><label>字号</label><input id=\"s-fs\" type=\"range\" min=\"13\" max=\"30\" step=\"1\"><span class=\"val\" id=\"v-fs\"></span></div>\n");
     html.push_str("<div class=\"srow\"><label>行距</label><input id=\"s-lh\" type=\"range\" min=\"1.3\" max=\"2.2\" step=\"0.05\"><span class=\"val\" id=\"v-lh\"></span></div>\n");
     html.push_str("<div class=\"srow\"><label>行宽</label><input id=\"s-width\" type=\"range\" min=\"26\" max=\"56\" step=\"1\"><span class=\"val\" id=\"v-width\"></span></div>\n");
+    html.push_str("<div class=\"srow\"><label>边距</label><input id=\"s-margin\" type=\"range\" min=\"0.5\" max=\"4\" step=\"0.25\"><span class=\"val\" id=\"v-margin\"></span></div>\n");
+    html.push_str(
+        "<div class=\"srow\"><label>对齐</label><div class=\"chips\" id=\"c-align\"></div></div>\n",
+    );
     html.push_str(
         "<div class=\"srow\"><label>字体</label><div class=\"chips\" id=\"c-font\"></div></div>\n",
     );
@@ -853,6 +866,8 @@ mod tests {
         assert!(html.contains("s-fs"), "缺字号滑条");
         assert!(html.contains("c-theme"), "缺主题选项");
         assert!(html.contains("楷体"), "缺字体选项");
+        assert!(html.contains("边距"), "缺边距滑条");
+        assert!(html.contains("两端对齐"), "缺对齐选项");
     }
 
     #[test]

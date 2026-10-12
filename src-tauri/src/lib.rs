@@ -18,7 +18,10 @@ struct BookView {
     format: String,
     size: u64,
     added_at: u64,
+    last_read_at: u64,
     progress: f32,
+    anchor_block: Option<String>,
+    anchor_offset: f32,
     builtin: bool,
     /// 封面数据 URL（可能没有或过大而省略）。
     cover_data: Option<String>,
@@ -38,7 +41,10 @@ fn to_view(dir: &std::path::Path, entry: &library::BookEntry) -> BookView {
         format: entry.format.clone(),
         size: entry.size,
         added_at: entry.added_at,
+        last_read_at: entry.last_read_at,
         progress: entry.progress,
+        anchor_block: entry.anchor_block.clone(),
+        anchor_offset: entry.anchor_offset,
         builtin: entry.builtin,
         cover_data,
     }
@@ -138,9 +144,25 @@ fn delete_book(app: tauri::AppHandle, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn save_progress(app: tauri::AppHandle, id: String, progress: f32) -> Result<(), String> {
+fn save_progress(
+    app: tauri::AppHandle,
+    id: String,
+    progress: f32,
+    anchor_block: Option<String>,
+    anchor_offset: Option<f32>,
+) -> Result<(), String> {
     let dir = data_dir(&app)?;
-    library::set_progress(&dir, &id, progress)
+    library::set_progress(&dir, &id, progress, anchor_block.as_deref(), anchor_offset)
+}
+
+#[tauri::command]
+fn search_book(
+    app: tauri::AppHandle,
+    id: String,
+    query: String,
+) -> Result<Vec<library::SearchHit>, String> {
+    let dir = data_dir(&app)?;
+    library::search(&dir, &id, &query)
 }
 
 #[tauri::command]
@@ -224,6 +246,7 @@ pub fn run() {
             read_book,
             delete_book,
             save_progress,
+            search_book,
             list_annotations,
             add_annotation,
             update_annotation,

@@ -24,14 +24,23 @@ pub struct BookEntry {
     pub id: String,
     pub title: String,
     pub author: Option<String>,
-    /// epub | txt
+    /// epub | txt | pdf
     pub format: String,
     pub file: String,
     pub cover: Option<String>,
     pub size: u64,
     pub added_at: u64,
+    /// 最近阅读时间（列表排序用；0 表示未读过）。
+    #[serde(default)]
+    pub last_read_at: u64,
     /// 阅读进度 0..1
     pub progress: f32,
+    /// 位置锚点：块 id（语义位置，CR-3；旧数据为 None）。
+    #[serde(default)]
+    pub anchor_block: Option<String>,
+    /// 锚点内偏移比例（0 起，占块高度）。
+    #[serde(default)]
+    pub anchor_offset: f32,
     pub builtin: bool,
 }
 
@@ -152,6 +161,17 @@ pub fn ingest(
                 report.cover_path,
             )
         }
+        "pdf" => {
+            // 元数据优先，失败回退文件名（无 pdfium 的构建同样安全）。
+            match cadmus_reflow::pdf_metadata(&file) {
+                Some((title, author)) => (
+                    title.unwrap_or_else(|| fallback_title.to_string()),
+                    author,
+                    None,
+                ),
+                None => (fallback_title.to_string(), None, None),
+            }
+        }
         _ => (fallback_title.to_string(), None, None),
     };
 
@@ -164,7 +184,10 @@ pub fn ingest(
         cover: cover.map(|path| store_relative(dir, &path)),
         size: bytes.len() as u64,
         added_at: now(),
+        last_read_at: 0,
         progress: 0.0,
+        anchor_block: None,
+        anchor_offset: 0.0,
         builtin,
     };
     let mut entries = load(dir);
@@ -386,14 +409,106 @@ pub fn delete_entry(dir: &Path, id: &str) -> Result<(), String> {
     save(dir, &entries)
 }
 
-/// 更新阅读进度。
-pub fn set_progress(dir: &Path, id: &str, progress: f32) -> Result<(), String> {
+/// 更新阅读进度与位置锚点（块 id + 块内偏移比例）。
+pub fn set_progress(
+    dir: &Path,
+    id: &str,
+    progress: f32,
+    anchor_block: Option<&str>,
+    anchor_offset: Option<f32>,
+) -> Result<(), String> {
     let mut entries = load(dir);
     let Some(entry) = entries.iter_mut().find(|entry| entry.id == id) else {
         return Err(format!("未找到书籍：{id}"));
     };
     entry.progress = progress.clamp(0.0, 1.0);
+    entry.last_read_at = now();
+    if let Some(block) = anchor_block {
+        entry.anchor_block = Some(block.to_string());
+    }
+    if let Some(offset) = anchor_offset {
+        entry.anchor_offset = offset.clamp(0.0, 1.0);
+    }
     save(dir, &entries)
+}
+
+/// 搜索结果项。
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchHit {
+    pub block_id: String,
+    pub order: usize,
+    pub excerpt: String,
+}
+
+/// 全文搜索（按块，每块至多一处；ASCII 查询大小写不敏感）。
+///
+/// PDF 依赖重排缓存（首次打开该书后可用）。
+pub fn search(dir: &Path, id: &str, query: &str) -> Result<Vec<SearchHit>, String> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let entries = load(dir);
+    let entry = entries
+        .iter()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| format!("未找到书籍：{id}"))?;
+    let Some(document) = parse_document(dir, entry) else {
+        return Ok(Vec::new());
+    };
+    let mut hits = Vec::new();
+    for (order, block) in document.blocks.iter().enumerate() {
+        let Some(text) = block.as_text() else {
+            continue;
+        };
+        let Some(byte_pos) = find_query(text, query) else {
+            continue;
+        };
+        hits.push(SearchHit {
+            block_id: block.id.to_string(),
+            order,
+            excerpt: excerpt_around(text, byte_pos, query.len()),
+        });
+        if hits.len() >= 200 {
+            break;
+        }
+    }
+    Ok(hits)
+}
+
+fn find_query(text: &str, query: &str) -> Option<usize> {
+    if let Some(position) = text.find(query) {
+        return Some(position);
+    }
+    if query.is_ascii() {
+        return text.to_lowercase().find(&query.to_lowercase());
+    }
+    None
+}
+
+/// 截取命中处前后各约 24 个字符的摘录（按字符边界）。
+fn excerpt_around(text: &str, byte_pos: usize, needle_len: usize) -> String {
+    let start = text[..byte_pos]
+        .char_indices()
+        .rev()
+        .nth(24)
+        .map(|(index, _)| index)
+        .unwrap_or(0);
+    let end_byte = byte_pos + needle_len;
+    let end = text[end_byte..]
+        .char_indices()
+        .nth(24)
+        .map(|(index, _)| end_byte + index)
+        .unwrap_or(text.len());
+    let mut excerpt = String::new();
+    if start > 0 {
+        excerpt.push('…');
+    }
+    excerpt.push_str(text[start..end].trim());
+    if end < text.len() {
+        excerpt.push('…');
+    }
+    excerpt
 }
 
 /// 导出某本书的标注为 Markdown（写入 `export_dir`，模板见 ARCHITECTURE §8）。
@@ -484,40 +599,34 @@ fn sanitize_file_name(name: &str) -> String {
     }
 }
 
-/// 块上下文：block_id →（序号, 最近标题, 原页）。解析失败时返回空表（导出退化为原序）。
-fn block_context(dir: &Path, entry: &BookEntry) -> HashMap<String, (usize, String, Option<u32>)> {
-    let document = match entry.format.as_str() {
+/// 解析书籍为文档（PDF 用重排缓存；EPUB/TXT 现场解析）。
+fn parse_document(dir: &Path, entry: &BookEntry) -> Option<cadmus_core::Document> {
+    match entry.format.as_str() {
         "pdf" => {
             // 优先用重排缓存（免重排）。
             let cached = assets_dir(dir, &entry.id).join(REFLOW_DOC_CACHE);
-            let Ok(raw) = fs::read_to_string(&cached) else {
-                return HashMap::new();
-            };
-            let Ok(document) = serde_json::from_str::<cadmus_core::Document>(&raw) else {
-                return HashMap::new();
-            };
-            document
+            let raw = fs::read_to_string(&cached).ok()?;
+            serde_json::from_str(&raw).ok()
+        }
+        "txt" => {
+            let bytes = fs::read(resolve_stored(dir, &entry.file)).ok()?;
+            let (document, _) =
+                cadmus_epub::parse_txt_bytes(&bytes, &cadmus_epub::TxtOptions::default()).ok()?;
+            Some(document)
         }
         _ => {
-            let Ok(bytes) = fs::read(resolve_stored(dir, &entry.file)) else {
-                return HashMap::new();
-            };
-            if entry.format == "txt" {
-                let Ok((document, _)) =
-                    cadmus_epub::parse_txt_bytes(&bytes, &cadmus_epub::TxtOptions::default())
-                else {
-                    return HashMap::new();
-                };
-                document
-            } else {
-                let Ok((document, _)) =
-                    cadmus_epub::parse_epub_bytes(&bytes, &cadmus_epub::EpubOptions::default())
-                else {
-                    return HashMap::new();
-                };
-                document
-            }
+            let bytes = fs::read(resolve_stored(dir, &entry.file)).ok()?;
+            let (document, _) =
+                cadmus_epub::parse_epub_bytes(&bytes, &cadmus_epub::EpubOptions::default()).ok()?;
+            Some(document)
         }
+    }
+}
+
+/// 块上下文：block_id →（序号, 最近标题, 原页）。解析失败时返回空表（导出退化为原序）。
+fn block_context(dir: &Path, entry: &BookEntry) -> HashMap<String, (usize, String, Option<u32>)> {
+    let Some(document) = parse_document(dir, entry) else {
+        return HashMap::new();
     };
     let mut map = HashMap::new();
     let mut heading = String::new();
@@ -668,7 +777,11 @@ mod tests {
             return;
         };
         let entry = ingest(&dir, &bytes, "pdf", "论文", false, Some("pdf1".into())).unwrap();
-        assert_eq!(entry.title, "论文");
+        assert!(
+            entry.title == "论文" || entry.title.to_lowercase().contains("lie"),
+            "标题应来自元数据或文件名回退：{}",
+            entry.title
+        );
 
         let html = match read_entry(&dir, &entry.id) {
             Ok(html) => html,
@@ -744,6 +857,35 @@ mod tests {
     }
 
     #[test]
+    fn search_finds_blocks_and_anchor_persists() {
+        let dir = temp_dir("search");
+        let bytes = build_epub(IMAGE_CHAPTER, &[("OEBPS/pic.png", &tiny_png())]);
+        let entry = ingest(&dir, &bytes, "epub", "搜索书", false, Some("se1".into())).unwrap();
+        assert_eq!(entry.last_read_at, 0);
+
+        // 搜索：命中摘录与块 id；空查询/无命中返回空。
+        let hits = search(&dir, "se1", "后面").unwrap();
+        assert_eq!(hits.len(), 1, "应命中一次");
+        assert!(hits[0].excerpt.contains("后面"), "摘录包含关键词");
+        assert!(search(&dir, "se1", "不存在的词").unwrap().is_empty());
+        assert!(search(&dir, "se1", "   ").unwrap().is_empty());
+
+        // 锚点保存与读取。
+        set_progress(&dir, "se1", 0.3, Some(&hits[0].block_id), Some(0.25)).unwrap();
+        let saved = load(&dir)
+            .into_iter()
+            .find(|entry| entry.id == "se1")
+            .unwrap();
+        assert_eq!(
+            saved.anchor_block.as_deref(),
+            Some(hits[0].block_id.as_str())
+        );
+        assert!((saved.anchor_offset - 0.25).abs() < 1e-6);
+        assert!(saved.last_read_at > 0, "阅读时间已更新");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn exports_markdown_in_document_order() {
         let dir = temp_dir("export");
         let sample = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sample/sample.epub");
@@ -800,7 +942,7 @@ mod tests {
         assert!(html.contains("第一章"), "阅读 HTML 缺章节");
         assert!(html.contains("c-theme"), "阅读 HTML 缺主题设置");
 
-        set_progress(&dir, &entry.id, 0.5).unwrap();
+        set_progress(&dir, &entry.id, 0.5, None, None).unwrap();
         let progress = load(&dir)
             .iter()
             .find(|item| item.id == entry.id)
