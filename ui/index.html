@@ -12,45 +12,67 @@
     background: Canvas; color: CanvasText;
     font-family: -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif;
   }
-  #shelf {
-    padding: max(1.5rem, env(safe-area-inset-top)) 1.5rem 2rem;
-    max-width: 44rem; margin: 0 auto;
+  #shelf { padding: max(1.2rem, env(safe-area-inset-top)) 1.25rem 2rem; max-width: 46rem; margin: 0 auto; }
+  .topbar { display: flex; align-items: center; gap: .5rem; margin: .8rem 0 1.6rem; }
+  .brand { display: flex; align-items: baseline; gap: .5rem; }
+  .brand .alpha { font-family: Georgia, "Noto Serif", serif; font-size: 2rem; line-height: 1; }
+  .brand h1 { font-size: 1.35rem; margin: 0; letter-spacing: .05em; }
+  .topbar .spacer { flex: 1; }
+  .topbar button {
+    font: inherit; font-size: .9rem; padding: .42rem .8rem; cursor: pointer;
+    border: 1px solid rgba(127, 127, 127, .35); border-radius: 999px;
+    background: transparent; color: CanvasText;
   }
-  .brand { display: flex; align-items: baseline; gap: .6rem; margin: 1rem 0 2.2rem; }
-  .brand .alpha { font-family: Georgia, "Noto Serif", serif; font-size: 2.4rem; line-height: 1; }
-  .brand h1 { font-size: 1.55rem; margin: 0; letter-spacing: .06em; }
-  .brand .sub { margin-left: auto; font-size: .85rem; opacity: .5; }
-  .shelf-title { font-size: .8rem; letter-spacing: .14em; opacity: .5; margin: 0 0 .7rem; }
+  .topbar button.primary { border-color: transparent; background: CanvasText; color: Canvas; }
+  .section-title { font-size: .78rem; letter-spacing: .14em; opacity: .5; margin: 0 0 .7rem; }
+  .books { display: grid; gap: .8rem; }
   .book {
-    display: flex; gap: 1rem; align-items: center;
-    padding: 1rem; border-radius: 14px; cursor: pointer;
-    border: 1px solid rgba(127, 127, 127, .28);
+    position: relative; display: flex; gap: 1rem; align-items: center;
+    padding: .95rem 1rem; border-radius: 14px;
+    border: 1px solid rgba(127, 127, 127, .28); cursor: pointer;
   }
-  .book:active { transform: scale(.99); }
+  .book:active { transform: scale(.995); }
   .book .cover {
-    width: 58px; height: 78px; border-radius: 6px; flex: none;
+    width: 54px; height: 74px; border-radius: 5px; flex: none; overflow: hidden;
     background: linear-gradient(160deg, #22303F, #18212E);
     display: grid; place-items: center;
-    color: #F3EAD8; font-family: Georgia, serif; font-size: 1.6rem;
+    color: #F3EAD8; font-family: Georgia, serif; font-size: 1.4rem;
   }
-  .book .meta { min-width: 0; }
-  .book .meta h2 { margin: 0 0 .25rem; font-size: 1.05rem; }
-  .book .meta p { margin: 0; font-size: .85rem; opacity: .55; }
-  .hint { margin-top: 2.4rem; font-size: .82rem; opacity: .45; line-height: 1.7; }
+  .book .cover img { width: 100%; height: 100%; object-fit: cover; }
+  .book .meta { min-width: 0; flex: 1; }
+  .book .meta h2 { margin: 0 0 .22rem; font-size: 1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .book .meta p { margin: 0 0 .45rem; font-size: .8rem; opacity: .55; }
+  .bar { height: 4px; border-radius: 2px; background: rgba(127, 127, 127, .25); overflow: hidden; }
+  .bar i { display: block; height: 100%; background: currentColor; opacity: .65; }
+  .book .tag { position: absolute; top: .6rem; right: .75rem; font-size: .7rem; opacity: .45; }
+  body.manage .book .tag { display: none; }
+  .book .del {
+    display: none; flex: none; width: 2.1rem; height: 2.1rem; border-radius: 50%;
+    border: 1px solid rgba(210, 80, 80, .65); background: transparent;
+    color: #d9534f; font-size: 1rem; cursor: pointer;
+  }
+  body.manage .book .del { display: grid; place-items: center; }
+  .hint { margin-top: 1.6rem; font-size: .8rem; opacity: .42; line-height: 1.8; }
   #reader { position: fixed; inset: 0; display: none; background: Canvas; }
   #reader.open { display: block; }
   #reader iframe { width: 100%; height: 100%; border: 0; }
   #back {
     position: fixed; z-index: 10;
     top: max(.6rem, env(safe-area-inset-top)); left: max(.6rem, env(safe-area-inset-left));
-    display: none; align-items: center; gap: .3rem;
-    padding: .45rem .85rem; border-radius: 999px;
+    display: none; padding: .45rem .85rem; border-radius: 999px;
     border: 1px solid rgba(127, 127, 127, .35);
-    background: Canvas; color: CanvasText;
-    font: inherit; font-size: .85rem; cursor: pointer;
+    background: Canvas; color: CanvasText; font: inherit; font-size: .85rem; cursor: pointer;
   }
   #back.open { display: inline-flex; }
   .loading { padding: 3rem 1rem; text-align: center; opacity: .5; }
+  #toast {
+    position: fixed; z-index: 50; left: 50%; bottom: max(1.2rem, env(safe-area-inset-bottom));
+    transform: translateX(-50%); max-width: 82vw;
+    padding: .6rem 1rem; border-radius: 10px;
+    background: rgba(0, 0, 0, .82); color: #fff; font-size: .85rem;
+    display: none;
+  }
+  #toast.show { display: block; }
   .bridge-error {
     margin: 1rem; padding: .8rem 1rem; border-radius: 10px;
     background: rgba(200, 60, 60, .12); color: #c0392b; font-size: .85rem;
@@ -59,22 +81,17 @@
 </head>
 <body>
 <main id="shelf">
-  <div class="brand">
-    <span class="alpha">α</span>
-    <h1>cadmus</h1>
-    <span class="sub">阅读预览版</span>
+  <div class="topbar">
+    <div class="brand"><span class="alpha">α</span><h1>cadmus</h1></div>
+    <span class="spacer"></span>
+    <button id="btn-manage">管理</button>
+    <button id="btn-import" class="primary">导入</button>
   </div>
-  <p class="shelf-title">书库</p>
-  <div class="book" id="sample-book">
-    <div class="cover">α</div>
-    <div class="meta">
-      <h2>山径夜行</h2>
-      <p>cadmus 示例书 · EPUB · 5 章</p>
-    </div>
-  </div>
+  <p class="section-title">书库</p>
+  <div class="books" id="books"></div>
   <p class="hint">
-    当前内置一本示例书，用来预览阅读体验（主题 / 字号 / 行宽 / 目录）。<br>
-    导入你自己的书（EPUB / PDF / TXT）是下一步。
+    支持导入 EPUB / TXT（PDF 阅读将在下一版支持）。<br>
+    阅读设置（字号 / 行距 / 行宽 / 字体 / 主题）在阅读页的「Aa 设置」里。
   </p>
 </main>
 
@@ -82,7 +99,8 @@
   <div class="loading" id="loading">正在打开…</div>
   <iframe id="frame" title="reader" hidden></iframe>
 </div>
-<button id="back">‹ 返回书库</button>
+<button id="back">‹ 书库</button>
+<div id="toast"></div>
 
 <script>
   (function () {
@@ -94,34 +112,180 @@
       );
       return;
     }
+    const invoke = bridge.invoke;
+    const booksEl = document.getElementById('books');
     const reader = document.getElementById('reader');
     const frame = document.getElementById('frame');
     const back = document.getElementById('back');
     const loading = document.getElementById('loading');
+    const toast = document.getElementById('toast');
+    let current = null;
+    let saveTimer = null;
 
-    document.getElementById('sample-book').addEventListener('click', async function () {
+    function showToast(text) {
+      toast.textContent = text;
+      toast.classList.add('show');
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(function () { toast.classList.remove('show'); }, 3200);
+    }
+
+    function fmtSize(bytes) {
+      if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+      return Math.max(1, Math.round(bytes / 1024)) + ' KB';
+    }
+
+    async function refresh() {
+      try {
+        const list = await invoke('list_books');
+        booksEl.innerHTML = '';
+        list.forEach(function (book) {
+          const card = document.createElement('div');
+          card.className = 'book';
+          card.innerHTML =
+            '<div class="cover"></div>' +
+            '<div class="meta"><h2></h2><p></p><div class="bar"><i></i></div></div>' +
+            '<span class="tag"></span>' +
+            '<button class="del" title="删除">✕</button>';
+          const cover = card.querySelector('.cover');
+          if (book.cover_data) {
+            const img = document.createElement('img');
+            img.src = book.cover_data;
+            img.alt = '';
+            cover.appendChild(img);
+          } else {
+            cover.textContent = 'α';
+          }
+          const pct = Math.round((book.progress || 0) * 100);
+          card.querySelector('h2').textContent = book.title;
+          card.querySelector('p').textContent =
+            (book.author || '未知作者') + ' · 已读 ' + pct + '%';
+          card.querySelector('.bar i').style.width = pct + '%';
+          card.querySelector('.tag').textContent =
+            book.builtin ? '内置' : (book.format.toUpperCase() + ' · ' + fmtSize(book.size));
+          card.addEventListener('click', function () {
+            if (document.body.classList.contains('manage')) return;
+            openBook(book.id);
+          });
+          card.querySelector('.del').addEventListener('click', async function (event) {
+            event.stopPropagation();
+            try {
+              const yes = await invoke('plugin:dialog|ask', {
+                title: '删除书籍',
+                message: '删除《' + book.title + '》？',
+                kind: 'warning'
+              });
+              if (!yes) return;
+              await invoke('delete_book', { id: book.id });
+              showToast('已删除');
+              refresh();
+            } catch (error) {
+              showToast('删除失败：' + error);
+            }
+          });
+          booksEl.appendChild(card);
+        });
+      } catch (error) {
+        showToast('书库加载失败：' + error);
+      }
+    }
+
+    async function openBook(id) {
+      current = id;
       reader.classList.add('open');
       back.classList.add('open');
       loading.style.display = 'block';
       loading.textContent = '正在打开…';
       frame.hidden = true;
       try {
-        const book = await bridge.invoke('read_sample_book');
+        const html = await invoke('read_book', { id: id });
         frame.onload = function () {
           loading.style.display = 'none';
           frame.hidden = false;
+          restoreProgress();
+          saveTimer = setInterval(saveProgress, 5000);
         };
-        frame.srcdoc = book.html;
+        frame.srcdoc = html;
       } catch (error) {
         loading.textContent = '打开失败：' + error;
       }
-    });
+    }
 
-    back.addEventListener('click', function () {
+    function readingProgress() {
+      try {
+        const win = frame.contentWindow;
+        const max = win.document.documentElement.scrollHeight - win.innerHeight;
+        if (max <= 0) return null;
+        return Math.min(1, Math.max(0, win.scrollY / max));
+      } catch (error) {
+        return null;
+      }
+    }
+
+    async function saveProgress() {
+      if (!current) return;
+      const progress = readingProgress();
+      if (progress === null) return;
+      try {
+        await invoke('save_progress', { id: current, progress: progress });
+      } catch (error) {}
+    }
+
+    async function restoreProgress() {
+      try {
+        const list = await invoke('list_books');
+        const book = list.find(function (item) { return item.id === current; });
+        if (!book || !book.progress) return;
+        const win = frame.contentWindow;
+        const max = win.document.documentElement.scrollHeight - win.innerHeight;
+        if (max > 0) win.scrollTo(0, book.progress * max);
+      } catch (error) {}
+    }
+
+    function closeReader() {
+      saveProgress();
+      if (saveTimer) { clearInterval(saveTimer); saveTimer = null; }
+      current = null;
       reader.classList.remove('open');
       back.classList.remove('open');
       frame.srcdoc = '';
+      setTimeout(refresh, 250);
+    }
+    back.addEventListener('click', closeReader);
+
+    document.getElementById('btn-manage').addEventListener('click', function () {
+      const on = document.body.classList.toggle('manage');
+      this.textContent = on ? '完成' : '管理';
     });
+
+    document.getElementById('btn-import').addEventListener('click', async function () {
+      try {
+        const picked = await invoke('plugin:dialog|open', {
+          options: {
+            multiple: true,
+            filters: [{ name: '电子书', extensions: ['epub', 'txt'] }]
+          }
+        });
+        if (!picked) return;
+        const paths = Array.isArray(picked) ? picked : [picked];
+        let ok = 0;
+        const errors = [];
+        for (const path of paths) {
+          try {
+            await invoke('import_book', { path: path });
+            ok++;
+          } catch (error) {
+            errors.push(String(error));
+          }
+        }
+        if (ok > 0) showToast('已导入 ' + ok + ' 本');
+        if (errors.length > 0) showToast('导入失败：' + errors[0]);
+        refresh();
+      } catch (error) {
+        showToast('打开文件选择器失败：' + error);
+      }
+    });
+
+    refresh();
   })();
 </script>
 </body>

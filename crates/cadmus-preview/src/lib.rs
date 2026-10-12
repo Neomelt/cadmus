@@ -1,7 +1,7 @@
 //! 阅读预览渲染：把块序列输出为可阅读的 HTML。
 //!
-//! 预览即阅读器体验的最小预演：主题（日间/夜间/纸张）、字号、行宽、
-//! 目录（由标题块生成）、封面与作者。CLI 与 App 共用本 crate。
+//! 阅读器体验：目录、设置面板（字号/行距/行宽滑条、字体、主题）。
+//! CLI 与 App 共用本 crate。
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -26,11 +26,14 @@ const HEAD: &str = r#"<!doctype html>
 
 const STYLE: &str = r#"<style>
 :root {
-  --fs: 18px; --width: 40rem;
+  --fs: 18px; --lh: 1.7; --width: 40rem;
+  --font: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", Georgia, serif;
   --bg: #ffffff; --fg: #1a1a1a; --muted: #8a8a8a; --soft: rgba(127,127,127,.14);
 }
+body[data-theme="sepia"] { --bg: #f6efe3; --fg: #3f342a; --muted: #9b8b77; --soft: rgba(120,90,50,.10); }
+body[data-theme="green"] { --bg: #cce8cf; --fg: #26332a; --muted: #6b7d6f; --soft: rgba(40,80,50,.12); }
 body[data-theme="night"] { --bg: #101418; --fg: #cfd6dd; --muted: #7b8794; --soft: rgba(255,255,255,.08); }
-body[data-theme="paper"] { --bg: #f6efe3; --fg: #3f342a; --muted: #9b8b77; --soft: rgba(120,90,50,.10); }
+body[data-theme="black"] { --bg: #000000; --fg: #b9b9b9; --muted: #6f6f6f; --soft: rgba(255,255,255,.07); }
 html, body { margin: 0; }
 body { background: var(--bg); color: var(--fg); }
 .toolbar {
@@ -47,8 +50,7 @@ body { background: var(--bg); color: var(--fg); }
 .toolbar .title { flex: 1; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 main {
   margin: 0 auto; padding: 2rem 1.25rem 5rem; max-width: var(--width);
-  font-family: "Noto Serif CJK SC", "Source Han Serif SC", Georgia, "Songti SC", serif;
-  font-size: var(--fs); line-height: 1.7;
+  font-family: var(--font); font-size: var(--fs); line-height: var(--lh);
 }
 main h1 { font-size: 1.5em; } main h2 { font-size: 1.25em; }
 p { margin: .9em 0; }
@@ -68,6 +70,28 @@ footer { margin-top: 3rem; color: var(--muted); font-size: .8em; text-align: cen
 }
 #toc.open { transform: none; }
 #toc a { display: block; padding: .45rem .2rem; color: var(--fg); text-decoration: none; border-bottom: 1px solid var(--soft); }
+#sheet {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  max-height: 72vh; overflow: auto;
+  background: var(--bg); border-top: 1px solid var(--soft);
+  border-radius: 14px 14px 0 0; padding: .9rem 1.1rem 1.6rem;
+  transform: translateY(105%); transition: transform .2s ease;
+  font-family: system-ui, sans-serif; font-size: 15px;
+  box-shadow: 0 -8px 30px rgba(0,0,0,.18);
+}
+#sheet.open { transform: none; }
+#sheet h3 { margin: .2rem 0 .8rem; font-size: .95rem; color: var(--muted); font-weight: 500; }
+.srow { display: flex; align-items: center; gap: .8rem; margin: .85rem 0; }
+.srow > label { width: 3rem; flex: none; color: var(--muted); }
+.srow input[type="range"] { flex: 1; accent-color: var(--fg); }
+.srow .val { width: 3.2rem; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.chips { display: flex; flex-wrap: wrap; gap: .45rem; }
+.chips button {
+  font: inherit; padding: .3rem .75rem; cursor: pointer;
+  border: 1px solid var(--soft); border-radius: 999px;
+  background: transparent; color: var(--fg);
+}
+.chips button.on { border-color: var(--fg); background: var(--soft); }
 #scrim { position: fixed; inset: 0; z-index: 35; background: rgba(0,0,0,.35); display: none; }
 #scrim.open { display: block; }
 </style>"#;
@@ -76,31 +100,78 @@ const SCRIPT: &str = r#"<script>
 (function () {
   var root = document.documentElement;
   var body = document.body;
-  var save = {};
-  try { save = JSON.parse(localStorage.getItem('cadmus-preview') || '{}'); } catch (e) {}
-  var settings = { fs: 18, width: 40, theme: 'day' };
-  for (var key in settings) { if (save[key]) settings[key] = save[key]; }
-  function persist() { try { localStorage.setItem('cadmus-preview', JSON.stringify(settings)); } catch (e) {} }
+
+  var FONTS = {
+    serif: '"Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", Georgia, serif',
+    sans: '-apple-system, "PingFang SC", "Noto Sans CJK SC", "Helvetica Neue", sans-serif',
+    kai: '"Kaiti SC", "STKaiti", "KaiTi", "AR PL UKai CN", serif'
+  };
+  var defaults = { fs: 18, lh: 1.7, width: 40, font: 'serif', theme: 'day' };
+  var settings = {};
+  for (var key in defaults) settings[key] = defaults[key];
+  try {
+    var saved = JSON.parse(localStorage.getItem('cadmus-reader-settings') || '{}');
+    for (var k2 in defaults) { if (saved[k2] !== undefined) settings[k2] = saved[k2]; }
+  } catch (e) {}
+
+  function persist() {
+    try { localStorage.setItem('cadmus-reader-settings', JSON.stringify(settings)); } catch (e) {}
+  }
   function apply() {
     root.style.setProperty('--fs', settings.fs + 'px');
+    root.style.setProperty('--lh', settings.lh);
     root.style.setProperty('--width', settings.width + 'rem');
+    root.style.setProperty('--font', FONTS[settings.font] || FONTS.serif);
     body.setAttribute('data-theme', settings.theme);
-    document.getElementById('theme-btn').textContent = ({ day: '日间', night: '夜间', paper: '纸张' })[settings.theme];
+    document.getElementById('s-fs').value = settings.fs;
+    document.getElementById('s-lh').value = settings.lh;
+    document.getElementById('s-width').value = settings.width;
+    document.getElementById('v-fs').textContent = settings.fs + 'px';
+    document.getElementById('v-lh').textContent = settings.lh.toFixed(2);
+    document.getElementById('v-width').textContent = settings.width + 'rem';
+    markChips('c-font', 'font');
+    markChips('c-theme', 'theme');
     persist();
   }
-  document.getElementById('fs-minus').addEventListener('click', function () { settings.fs = Math.max(13, settings.fs - 1); apply(); });
-  document.getElementById('fs-plus').addEventListener('click', function () { settings.fs = Math.min(28, settings.fs + 1); apply(); });
-  document.getElementById('width-btn').addEventListener('click', function () { settings.width = settings.width >= 40 ? 32 : 40; apply(); });
-  document.getElementById('theme-btn').addEventListener('click', function () {
-    var order = ['day', 'night', 'paper'];
-    settings.theme = order[(order.indexOf(settings.theme) + 1) % order.length];
-    apply();
-  });
-  var toc = document.getElementById('toc');
+  function markChips(id, key) {
+    var buttons = document.getElementById(id).querySelectorAll('button');
+    for (var i = 0; i < buttons.length; i++) {
+      buttons[i].classList.toggle('on', buttons[i].dataset.value === settings[key]);
+    }
+  }
+  function buildChips(id, items, key) {
+    var wrap = document.getElementById(id);
+    items.forEach(function (item) {
+      var b = document.createElement('button');
+      b.textContent = item[1];
+      b.dataset.value = item[0];
+      b.addEventListener('click', function () { settings[key] = item[0]; apply(); });
+      wrap.appendChild(b);
+    });
+  }
+
+  document.getElementById('s-fs').addEventListener('input', function () { settings.fs = +this.value; apply(); });
+  document.getElementById('s-lh').addEventListener('input', function () { settings.lh = +this.value; apply(); });
+  document.getElementById('s-width').addEventListener('input', function () { settings.width = +this.value; apply(); });
+
+  buildChips('c-font', [['serif', '宋体'], ['sans', '黑体'], ['kai', '楷体']], 'font');
+  buildChips('c-theme', [['day', '日间'], ['sepia', '米黄'], ['green', '护眼'], ['night', '深灰'], ['black', '纯黑']], 'theme');
+
   var scrim = document.getElementById('scrim');
-  function closeToc() { toc.classList.remove('open'); scrim.classList.remove('open'); }
-  document.getElementById('toc-btn').addEventListener('click', function () { toc.classList.add('open'); scrim.classList.add('open'); });
-  scrim.addEventListener('click', closeToc);
+  function closeAll() {
+    document.getElementById('toc').classList.remove('open');
+    document.getElementById('sheet').classList.remove('open');
+    scrim.classList.remove('open');
+  }
+  function openOne(id) {
+    closeAll();
+    document.getElementById(id).classList.add('open');
+    scrim.classList.add('open');
+  }
+  document.getElementById('toc-btn').addEventListener('click', function () { openOne('toc'); });
+  document.getElementById('set-btn').addEventListener('click', function () { openOne('sheet'); });
+  scrim.addEventListener('click', closeAll);
+
   var nav = document.getElementById('toc-nav');
   var headings = document.querySelectorAll('main h1, main h2');
   for (var i = 0; i < headings.length; i++) {
@@ -110,10 +181,11 @@ const SCRIPT: &str = r#"<script>
     a.textContent = h.textContent;
     a.href = '#' + h.id;
     if (h.tagName === 'H2') a.style.paddingLeft = '1rem';
-    a.addEventListener('click', closeToc);
+    a.addEventListener('click', closeAll);
     nav.appendChild(a);
   }
   if (headings.length === 0) nav.innerHTML = '<p style="color:var(--muted)">（没有可导航的标题）</p>';
+
   apply();
 })();
 </script>"#;
@@ -133,15 +205,23 @@ pub fn render_to_string(
     html.push_str("<div class=\"toolbar\">\n");
     html.push_str("<button id=\"toc-btn\">目录</button>\n");
     let _ = writeln!(html, "<span class=\"title\">{}</span>", escape(meta.title));
-    html.push_str("<button id=\"theme-btn\">日间</button>\n");
-    html.push_str("<button id=\"fs-minus\">A−</button>\n");
-    html.push_str("<button id=\"fs-plus\">A+</button>\n");
-    html.push_str("<button id=\"width-btn\">行宽</button>\n");
+    html.push_str("<button id=\"set-btn\">Aa 设置</button>\n");
     html.push_str("</div>\n");
 
+    html.push_str("<div id=\"scrim\"></div>\n");
+    html.push_str("<aside id=\"toc\"><nav id=\"toc-nav\"></nav></aside>\n");
+    html.push_str("<section id=\"sheet\">\n<h3>阅读设置</h3>\n");
+    html.push_str("<div class=\"srow\"><label>字号</label><input id=\"s-fs\" type=\"range\" min=\"13\" max=\"30\" step=\"1\"><span class=\"val\" id=\"v-fs\"></span></div>\n");
+    html.push_str("<div class=\"srow\"><label>行距</label><input id=\"s-lh\" type=\"range\" min=\"1.3\" max=\"2.2\" step=\"0.05\"><span class=\"val\" id=\"v-lh\"></span></div>\n");
+    html.push_str("<div class=\"srow\"><label>行宽</label><input id=\"s-width\" type=\"range\" min=\"26\" max=\"56\" step=\"1\"><span class=\"val\" id=\"v-width\"></span></div>\n");
     html.push_str(
-        "<div id=\"scrim\"></div>\n<aside id=\"toc\"><nav id=\"toc-nav\"></nav></aside>\n",
+        "<div class=\"srow\"><label>字体</label><div class=\"chips\" id=\"c-font\"></div></div>\n",
     );
+    html.push_str(
+        "<div class=\"srow\"><label>主题</label><div class=\"chips\" id=\"c-theme\"></div></div>\n",
+    );
+    html.push_str("</section>\n");
+
     html.push_str("<main id=\"content\">\n");
 
     if let Some(cover) = meta.cover {
@@ -163,7 +243,7 @@ pub fn render_to_string(
     }
     let _ = writeln!(
         html,
-        "</main>\n<footer>cadmus 预览 · {} 个块</footer>",
+        "</main>\n<footer>cadmus · {} 个块</footer>",
         document.blocks.len()
     );
     html.push_str(SCRIPT);
@@ -256,5 +336,8 @@ mod tests {
         assert!(html.contains("<title>书</title>"));
         assert!(html.contains("正文 &lt;b&gt;不是标签&lt;/b&gt; &amp; 符号"));
         assert!(html.contains("作者"));
+        assert!(html.contains("s-fs"), "缺字号滑条");
+        assert!(html.contains("c-theme"), "缺主题选项");
+        assert!(html.contains("楷体"), "缺字体选项");
     }
 }

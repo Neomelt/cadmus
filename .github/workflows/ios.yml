@@ -55,11 +55,14 @@ jobs:
           IPA=$(find src-tauri/gen/apple -name '*.ipa' | head -1)
           echo "ipa=$IPA"
           test -n "$IPA"
-          cp "$IPA" cadmus-unsigned.ipa
-          ls -la cadmus-unsigned.ipa
+          VERSION=$(python3 -c "import json;print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          cp "$IPA" "cadmus-${VERSION}-unsigned.ipa"
+          ls -la "cadmus-${VERSION}-unsigned.ipa"
+          echo "### iOS IPA：cadmus-${VERSION}-unsigned.ipa（未签名，SideStore 侧载）" >> "$GITHUB_STEP_SUMMARY"
       - name: upload ipa
         uses: actions/upload-artifact@v4
         with:
-          name: cadmus-unsigned-ipa
-          path: cadmus-unsigned.ipa
+          name: cadmus-ipa
+          path: cadmus-*-unsigned.ipa
           if-no-files-found: error
