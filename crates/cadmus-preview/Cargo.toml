@@ -1,0 +1,9 @@
+[package]
+name = "cadmus-preview"
+description = "cadmus 阅读预览渲染：块序列 → 可阅读的 HTML（CLI 与 App 共用）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cadmus-core = { path = "../cadmus-core" }

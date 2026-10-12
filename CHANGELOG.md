@@ -20,6 +20,7 @@
 - cadmus-epub：dc:creator 与封面（EPUB2/3）解析导出
 - src-tauri：Tauri 2 空壳（iOS 出包链路验证）；ios.yml 产出未签名 IPA（SideStore 侧载用，D12）
 - ios：未签名 IPA 流水线跑通（macos-15 + `tauri ios build --no-sign`；Release/artifact 下载）
+- app：引擎接入（内置示例书可读：EPUB → 块序列 → 阅读 HTML；主题/字号/行宽/目录）；App 图标/设备族修正（iPad 专用）；官方阅读渲染器抽为 cadmus-preview crate
 - CI：产出 cadmus-cli Linux 发布产物（Actions artifact）
 
 ### 变更

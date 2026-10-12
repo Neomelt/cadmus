@@ -29,4 +29,4 @@
 
 ## 状态
 
-PRD v1.2 · 2026-10-12 · M1 引擎跑通（PDF 重排 / EPUB / TXT / CLI）· iOS 未签名 IPA 流水线跑通（SideStore 侧载）· CR-1 待人工抽样复核
+PRD v1.2 · 2026-10-12 · M1 引擎跑通（PDF 重排 / EPUB / TXT / CLI）· App 内置示例书可读（iPad，SideStore 侧载）· CR-1 待人工抽样复核

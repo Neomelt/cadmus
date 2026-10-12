@@ -163,6 +163,7 @@ version = "0.1.0"
 dependencies = [
  "cadmus-core",
  "cadmus-epub",
+ "cadmus-preview",
  "cadmus-reflow",
  "clap",
  "serde_json",
@@ -181,6 +182,13 @@ dependencies = [
  "encoding_rs",
  "roxmltree",
  "zip",
+]
+
+[[package]]
+name = "cadmus-preview"
+version = "0.1.0"
+dependencies = [
+ "cadmus-core",
 ]
 
 [[package]]

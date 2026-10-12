@@ -5,23 +5,124 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>cadmus</title>
 <style>
-:root { color-scheme: light dark; }
-html, body { height: 100%; margin: 0; }
-body {
-  display: grid; place-items: center;
-  background: Canvas; color: CanvasText;
-  font-family: -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif;
-}
-main { text-align: center; padding: 2rem; }
-h1 { font-size: 2rem; letter-spacing: .06em; margin: 0 0 .75rem; }
-p { margin: .3rem 0; opacity: .55; }
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%; margin: 0;
+    background: Canvas; color: CanvasText;
+    font-family: -apple-system, "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  }
+  #shelf {
+    padding: max(1.5rem, env(safe-area-inset-top)) 1.5rem 2rem;
+    max-width: 44rem; margin: 0 auto;
+  }
+  .brand { display: flex; align-items: baseline; gap: .6rem; margin: 1rem 0 2.2rem; }
+  .brand .alpha { font-family: Georgia, "Noto Serif", serif; font-size: 2.4rem; line-height: 1; }
+  .brand h1 { font-size: 1.55rem; margin: 0; letter-spacing: .06em; }
+  .brand .sub { margin-left: auto; font-size: .85rem; opacity: .5; }
+  .shelf-title { font-size: .8rem; letter-spacing: .14em; opacity: .5; margin: 0 0 .7rem; }
+  .book {
+    display: flex; gap: 1rem; align-items: center;
+    padding: 1rem; border-radius: 14px; cursor: pointer;
+    border: 1px solid rgba(127, 127, 127, .28);
+  }
+  .book:active { transform: scale(.99); }
+  .book .cover {
+    width: 58px; height: 78px; border-radius: 6px; flex: none;
+    background: linear-gradient(160deg, #22303F, #18212E);
+    display: grid; place-items: center;
+    color: #F3EAD8; font-family: Georgia, serif; font-size: 1.6rem;
+  }
+  .book .meta { min-width: 0; }
+  .book .meta h2 { margin: 0 0 .25rem; font-size: 1.05rem; }
+  .book .meta p { margin: 0; font-size: .85rem; opacity: .55; }
+  .hint { margin-top: 2.4rem; font-size: .82rem; opacity: .45; line-height: 1.7; }
+  #reader { position: fixed; inset: 0; display: none; background: Canvas; }
+  #reader.open { display: block; }
+  #reader iframe { width: 100%; height: 100%; border: 0; }
+  #back {
+    position: fixed; z-index: 10;
+    top: max(.6rem, env(safe-area-inset-top)); left: max(.6rem, env(safe-area-inset-left));
+    display: none; align-items: center; gap: .3rem;
+    padding: .45rem .85rem; border-radius: 999px;
+    border: 1px solid rgba(127, 127, 127, .35);
+    background: Canvas; color: CanvasText;
+    font: inherit; font-size: .85rem; cursor: pointer;
+  }
+  #back.open { display: inline-flex; }
+  .loading { padding: 3rem 1rem; text-align: center; opacity: .5; }
+  .bridge-error {
+    margin: 1rem; padding: .8rem 1rem; border-radius: 10px;
+    background: rgba(200, 60, 60, .12); color: #c0392b; font-size: .85rem;
+  }
 </style>
 </head>
 <body>
-<main>
-  <h1>cadmus</h1>
-  <p>阅读器空壳 · 出包链路验证</p>
-  <p>引擎已在 CLI 可用（PDF 重排 / EPUB / TXT）</p>
+<main id="shelf">
+  <div class="brand">
+    <span class="alpha">α</span>
+    <h1>cadmus</h1>
+    <span class="sub">阅读预览版</span>
+  </div>
+  <p class="shelf-title">书库</p>
+  <div class="book" id="sample-book">
+    <div class="cover">α</div>
+    <div class="meta">
+      <h2>山径夜行</h2>
+      <p>cadmus 示例书 · EPUB · 5 章</p>
+    </div>
+  </div>
+  <p class="hint">
+    当前内置一本示例书，用来预览阅读体验（主题 / 字号 / 行宽 / 目录）。<br>
+    导入你自己的书（EPUB / PDF / TXT）是下一步。
+  </p>
 </main>
+
+<div id="reader">
+  <div class="loading" id="loading">正在打开…</div>
+  <iframe id="frame" title="reader" hidden></iframe>
+</div>
+<button id="back">‹ 返回书库</button>
+
+<script>
+  (function () {
+    const bridge = window.__TAURI__ && window.__TAURI__.core;
+    if (!bridge) {
+      document.body.insertAdjacentHTML(
+        'afterbegin',
+        '<p class="bridge-error">Tauri 桥接未注入（window.__TAURI__ 不存在），请报告此状态。</p>'
+      );
+      return;
+    }
+    const reader = document.getElementById('reader');
+    const frame = document.getElementById('frame');
+    const back = document.getElementById('back');
+    const loading = document.getElementById('loading');
+
+    document.getElementById('sample-book').addEventListener('click', async function () {
+      reader.classList.add('open');
+      back.classList.add('open');
+      loading.style.display = 'block';
+      loading.textContent = '正在打开…';
+      frame.hidden = true;
+      try {
+        const book = await bridge.invoke('read_sample_book');
+        frame.onload = function () {
+          loading.style.display = 'none';
+          frame.hidden = false;
+        };
+        frame.srcdoc = book.html;
+      } catch (error) {
+        loading.textContent = '打开失败：' + error;
+      }
+    });
+
+    back.addEventListener('click', function () {
+      reader.classList.remove('open');
+      back.classList.remove('open');
+      frame.srcdoc = '';
+    });
+  })();
+</script>
 </body>
 </html>

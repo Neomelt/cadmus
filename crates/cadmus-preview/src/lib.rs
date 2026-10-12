@@ -1,7 +1,7 @@
-//! HTML 预览渲染：把块序列输出为可阅读的 `index.html`。
+//! 阅读预览渲染：把块序列输出为可阅读的 HTML。
 //!
 //! 预览即阅读器体验的最小预演：主题（日间/夜间/纸张）、字号、行宽、
-//! 目录（由标题块生成）、封面与作者。全部内嵌，离线单文件 + 位图可开。
+//! 目录（由标题块生成）、封面与作者。CLI 与 App 共用本 crate。
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -118,9 +118,12 @@ const SCRIPT: &str = r#"<script>
 })();
 </script>"#;
 
-/// 渲染为 `<out_dir>/index.html`，位图以相对路径引用。
-pub fn render(document: &Document, out_dir: &Path, meta: &PreviewMeta<'_>) -> Result<PathBuf> {
-    std::fs::create_dir_all(out_dir)?;
+/// 渲染为 HTML 字符串；`base` 用于把位图路径转为相对路径（无位图时可为空路径）。
+pub fn render_to_string(
+    document: &Document,
+    base: &Path,
+    meta: &PreviewMeta<'_>,
+) -> Result<String> {
     let mut html = String::new();
     html.push_str(HEAD);
     let _ = writeln!(html, "<title>{}</title>", escape(meta.title));
@@ -145,7 +148,7 @@ pub fn render(document: &Document, out_dir: &Path, meta: &PreviewMeta<'_>) -> Re
         let _ = writeln!(
             html,
             "<img class=\"cover\" src=\"{}\" alt=\"cover\">",
-            escape(&relative(cover, out_dir))
+            escape(&relative(cover, base))
         );
     }
     if meta.cover.is_some() || meta.byline.is_some() {
@@ -156,7 +159,7 @@ pub fn render(document: &Document, out_dir: &Path, meta: &PreviewMeta<'_>) -> Re
     }
 
     for block in &document.blocks {
-        render_block(&mut html, block, out_dir);
+        render_block(&mut html, block, base);
     }
     let _ = writeln!(
         html,
@@ -165,13 +168,19 @@ pub fn render(document: &Document, out_dir: &Path, meta: &PreviewMeta<'_>) -> Re
     );
     html.push_str(SCRIPT);
     html.push_str("</body>\n</html>\n");
+    Ok(html)
+}
 
+/// 渲染并写入 `<out_dir>/index.html`，位图以相对路径引用。
+pub fn render(document: &Document, out_dir: &Path, meta: &PreviewMeta<'_>) -> Result<PathBuf> {
+    std::fs::create_dir_all(out_dir)?;
+    let html = render_to_string(document, out_dir, meta)?;
     let path = out_dir.join("index.html");
     std::fs::write(&path, html)?;
     Ok(path)
 }
 
-fn render_block(html: &mut String, block: &Block, out_dir: &Path) {
+fn render_block(html: &mut String, block: &Block, base: &Path) {
     match (&block.kind, &block.payload) {
         (BlockKind::Heading { level }, Payload::Text(text)) => {
             let tag = if *level <= 1 { "h1" } else { "h2" };
@@ -187,26 +196,26 @@ fn render_block(html: &mut String, block: &Block, out_dir: &Path) {
             let _ = writeln!(
                 html,
                 "<figure><img class=\"formula\" src=\"{}\" alt=\"formula\"></figure>",
-                escape(&relative_src(bitmap, out_dir))
+                escape(&relative_src(bitmap, base))
             );
         }
         (_, Payload::Bitmap(bitmap)) => {
             let _ = writeln!(
                 html,
                 "<figure><img src=\"{}\" alt=\"figure\"></figure>",
-                escape(&relative_src(bitmap, out_dir))
+                escape(&relative_src(bitmap, base))
             );
         }
     }
 }
 
-fn relative_src(bitmap: &BitmapRef, out_dir: &Path) -> String {
-    relative(&bitmap.path, out_dir)
+fn relative_src(bitmap: &BitmapRef, base: &Path) -> String {
+    relative(&bitmap.path, base)
 }
 
-fn relative(path: &str, out_dir: &Path) -> String {
+fn relative(path: &str, base: &Path) -> String {
     Path::new(path)
-        .strip_prefix(out_dir)
+        .strip_prefix(base)
         .map(|rel| rel.display().to_string())
         .unwrap_or_else(|_| path.to_string())
 }
@@ -215,4 +224,37 @@ fn escape(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cadmus_core::BlockKind;
+
+    #[test]
+    fn renders_title_and_escapes_text() {
+        let document = Document {
+            doc_hash: 1,
+            title: Some("书".into()),
+            blocks: vec![Block::text(
+                1,
+                BlockKind::Paragraph,
+                0,
+                "正文 <b>不是标签</b> & 符号",
+            )],
+        };
+        let html = render_to_string(
+            &document,
+            Path::new(""),
+            &PreviewMeta {
+                title: "书",
+                byline: Some("作者"),
+                cover: None,
+            },
+        )
+        .unwrap();
+        assert!(html.contains("<title>书</title>"));
+        assert!(html.contains("正文 &lt;b&gt;不是标签&lt;/b&gt; &amp; 符号"));
+        assert!(html.contains("作者"));
+    }
 }

@@ -30,6 +30,11 @@ jobs:
         run: npm install -g @tauri-apps/cli@^2
       - name: ios init
         run: tauri ios init --ci
+      - name: apply app icons and device family
+        run: |
+          cp -f src-tauri/icons/ios/*.png src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/
+          sed -i '' 's/TARGETED_DEVICE_FAMILY = "1,2"/TARGETED_DEVICE_FAMILY = "2"/g' src-tauri/gen/apple/cadmus.xcodeproj/project.pbxproj
+          echo "ipad-only targets: $(grep -c 'TARGETED_DEVICE_FAMILY = "2"' src-tauri/gen/apple/cadmus.xcodeproj/project.pbxproj)"
       - name: upload generated xcode project
         uses: actions/upload-artifact@v4
         with:

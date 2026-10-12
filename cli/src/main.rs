@@ -8,10 +8,9 @@ use std::time::Instant;
 
 use cadmus_core::{Block, BlockKind, Cancel, Document, Error, Payload, Result};
 use cadmus_epub::{EpubOptions, TxtOptions, parse_epub, parse_txt_bytes};
+use cadmus_preview::{PreviewMeta, render};
 use cadmus_reflow::{ReflowOptions, reflow};
 use clap::{Args, Parser, Subcommand, ValueEnum};
-
-mod html;
 
 #[derive(Parser)]
 #[command(name = "cadmus-cli", version, about = "cadmus 阅读引擎开发工具（M1）")]
@@ -165,12 +164,12 @@ fn run_reflow(args: &ReflowArgs) -> Result<ExitCode> {
                 .file_stem()
                 .map(|stem| stem.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "cadmus".to_string());
-            let meta = html::PreviewMeta {
+            let meta = PreviewMeta {
                 title: &title,
                 byline: None,
                 cover: None,
             };
-            let path = html::render(&document, &options.out_dir, &meta)?;
+            let path = render(&document, &options.out_dir, &meta)?;
             eprintln!("HTML 预览：{}", path.display());
         }
     }
@@ -291,12 +290,12 @@ fn run_epub(args: &EpubArgs) -> Result<ExitCode> {
                         .map(|stem| stem.to_string_lossy().into_owned())
                 })
                 .unwrap_or_else(|| "cadmus".to_string());
-            let meta = html::PreviewMeta {
+            let meta = PreviewMeta {
                 title: &title,
                 byline: authors.as_deref(),
                 cover: report.cover_path.as_deref(),
             };
-            let path = html::render(&document, &out_dir, &meta)?;
+            let path = render(&document, &out_dir, &meta)?;
             eprintln!("HTML 预览：{}", path.display());
         }
         EpubDump::Blocks => {
