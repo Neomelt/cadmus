@@ -178,7 +178,7 @@ const SCRIPT: &str = r#"<script>
     sans: '-apple-system, "PingFang SC", "Noto Sans CJK SC", "Helvetica Neue", sans-serif',
     kai: '"Kaiti SC", "STKaiti", "KaiTi", "AR PL UKai CN", serif'
   };
-  var defaults = { fs: 18, lh: 1.7, width: 40, margin: 1.25, font: 'serif', theme: 'day', align: 'left' };
+  var defaults = { fs: 18, lh: 1.7, width: 40, margin: 1.25, font: 'serif', theme: 'day', align: 'left', mode: 'scroll' };
   var settings = {};
   for (var key in defaults) settings[key] = defaults[key];
   try {
@@ -197,6 +197,7 @@ const SCRIPT: &str = r#"<script>
     root.style.setProperty('--align', settings.align === 'justify' ? 'justify' : 'left');
     root.style.setProperty('--font', FONTS[settings.font] || FONTS.serif);
     body.setAttribute('data-theme', settings.theme);
+    body.setAttribute('data-mode', settings.mode === 'paged' ? 'paged' : 'scroll');
     document.getElementById('s-fs').value = settings.fs;
     document.getElementById('s-lh').value = settings.lh;
     document.getElementById('s-width').value = settings.width;
@@ -208,6 +209,7 @@ const SCRIPT: &str = r#"<script>
     markChips('c-font', 'font');
     markChips('c-theme', 'theme');
     markChips('c-align', 'align');
+    markChips('c-mode', 'mode');
     persist();
   }
   function markChips(id, key) {
@@ -235,6 +237,22 @@ const SCRIPT: &str = r#"<script>
   buildChips('c-font', [['serif', '宋体'], ['sans', '黑体'], ['kai', '楷体']], 'font');
   buildChips('c-theme', [['day', '日间'], ['sepia', '米黄'], ['green', '护眼'], ['night', '深灰'], ['black', '纯黑']], 'theme');
   buildChips('c-align', [['left', '左对齐'], ['justify', '两端对齐']], 'align');
+  buildChips('c-mode', [['scroll', '滚动'], ['paged', '整屏翻页']], 'mode');
+
+  // ---- 整屏翻页：点按分区（左 25% 后退 / 右 25% 前进）----
+  document.getElementById('content').addEventListener('click', function (event) {
+    if (settings.mode !== 'paged') return;
+    if (event.target && event.target.closest && event.target.closest('mark.hl, a, button, input')) return;
+    var sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && !sel.isCollapsed && String(sel).trim() !== '') return;
+    var ratio = event.clientX / window.innerWidth;
+    var step = window.innerHeight - 110;
+    if (ratio < 0.25) {
+      window.scrollBy({ top: -step, behavior: 'smooth' });
+    } else if (ratio > 0.75) {
+      window.scrollBy({ top: step, behavior: 'smooth' });
+    }
+  });
 
   var scrim = document.getElementById('scrim');
   function closeAll() {
@@ -534,7 +552,7 @@ pub fn render_to_string(
     html.push_str(HEAD);
     let _ = writeln!(html, "<title>{}</title>", escape(meta.title));
     html.push_str(STYLE);
-    html.push_str("</head>\n<body data-theme=\"day\">\n");
+    html.push_str("</head>\n<body data-theme=\"day\" data-mode=\"scroll\">\n");
 
     html.push_str("<div class=\"toolbar\">\n");
     html.push_str("<button id=\"toc-btn\">目录</button>\n");
@@ -556,6 +574,9 @@ pub fn render_to_string(
     html.push_str("<div class=\"srow\"><label>边距</label><input id=\"s-margin\" type=\"range\" min=\"0.5\" max=\"4\" step=\"0.25\"><span class=\"val\" id=\"v-margin\"></span></div>\n");
     html.push_str(
         "<div class=\"srow\"><label>对齐</label><div class=\"chips\" id=\"c-align\"></div></div>\n",
+    );
+    html.push_str(
+        "<div class=\"srow\"><label>翻页</label><div class=\"chips\" id=\"c-mode\"></div></div>\n",
     );
     html.push_str(
         "<div class=\"srow\"><label>字体</label><div class=\"chips\" id=\"c-font\"></div></div>\n",
@@ -930,6 +951,8 @@ mod tests {
         assert!(html.contains("两端对齐"), "缺对齐选项");
         assert!(html.contains("pbar-range"), "缺底部进度条");
         assert!(html.contains("pbar-chap"), "缺进度条章节名");
+        assert!(html.contains("整屏翻页"), "缺翻页模式选项");
+        assert!(html.contains("data-mode=\"scroll\""), "缺初始翻页模式标记");
     }
 
     #[test]
