@@ -8,11 +8,13 @@ pub enum ContentBlock {
     Text {
         kind: BlockKind,
         text: String,
+        /// noteref 目标（`href="#fn1"` → `fn1`），按出现顺序。
+        note_refs: Vec<String>,
     },
+    /// 脚注正文（`epub:type="footnote"`，`id` 供 noteref 配对）。
+    Footnote { id: Option<String>, text: String },
     /// 图片：`src` 为相对章节文件的路径（调用方负责解析与提取）。
-    Image {
-        src: String,
-    },
+    Image { src: String },
 }
 
 /// EPUB 结构语义命名空间（`epub:type`）。
@@ -41,13 +43,28 @@ fn walk(node: roxmltree::Node<'_, '_>, out: &mut Vec<ContentBlock>) {
         match tag.as_str() {
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
                 let level = tag[1..].parse::<u8>().unwrap_or(1);
-                push_text(out, BlockKind::Heading { level }, collect_text(child));
+                push_text(
+                    out,
+                    BlockKind::Heading { level },
+                    collect_text(child),
+                    collect_note_refs(child),
+                );
             }
             "p" | "blockquote" | "li" | "figcaption" => {
                 flush_container(out, BlockKind::Paragraph, child);
             }
-            "pre" => push_text(out, BlockKind::Code, collect_text(child)),
-            "table" => push_text(out, BlockKind::Table, collect_table(child)),
+            "pre" => push_text(
+                out,
+                BlockKind::Code,
+                collect_text(child),
+                collect_note_refs(child),
+            ),
+            "table" => push_text(
+                out,
+                BlockKind::Table,
+                collect_table(child),
+                collect_note_refs(child),
+            ),
             "img" | "svg" => push_image(out, child),
             _ => walk(child, out),
         }
@@ -56,9 +73,20 @@ fn walk(node: roxmltree::Node<'_, '_>, out: &mut Vec<ContentBlock>) {
 
 /// 段落类容器：文本与内嵌图片按出现顺序输出（`<p>文字<img/></p>` 不丢图）。
 fn flush_container(out: &mut Vec<ContentBlock>, kind: BlockKind, node: roxmltree::Node<'_, '_>) {
+    let start = out.len();
     let mut pending = String::new();
     collect_mixed(node, out, &mut pending);
-    push_text(out, kind, pending);
+    push_text(out, kind, pending, Vec::new());
+    // 把 noteref 挂到本容器最后一段文本上（图片前后的片段都可能持有标记）。
+    let refs = collect_note_refs(node);
+    if !refs.is_empty()
+        && let Some(ContentBlock::Text { note_refs, .. }) = out[start..]
+            .iter_mut()
+            .rev()
+            .find(|block| matches!(block, ContentBlock::Text { .. }))
+    {
+        note_refs.extend(refs);
+    }
 }
 
 /// 收集文本与图片的混排：文本累积在 `pending`，遇到图片先冲出文本块再输出图片。
@@ -76,7 +104,12 @@ fn collect_mixed(node: roxmltree::Node<'_, '_>, out: &mut Vec<ContentBlock>, pen
             let tag = child.tag_name().name().to_ascii_lowercase();
             match tag.as_str() {
                 "img" | "svg" => {
-                    push_text(out, BlockKind::Paragraph, std::mem::take(pending));
+                    push_text(
+                        out,
+                        BlockKind::Paragraph,
+                        std::mem::take(pending),
+                        Vec::new(),
+                    );
                     push_image(out, child);
                 }
                 "br" => pending.push('\n'),
@@ -115,7 +148,23 @@ fn push_footnote(out: &mut Vec<ContentBlock>, node: roxmltree::Node<'_, '_>) {
     let mut text = String::new();
     collect_text_ext(node, &mut text, true);
     let text = text.trim().trim_end_matches(['↩', '↵']).trim();
-    push_text(out, BlockKind::Footnote, text.to_string());
+    if text.is_empty() {
+        return;
+    }
+    out.push(ContentBlock::Footnote {
+        id: node.attribute("id").map(str::to_string),
+        text: text.to_string(),
+    });
+}
+
+/// 收集容器内 noteref 的目标（`href="#fn1"` → `fn1`），按出现顺序。
+fn collect_note_refs(node: roxmltree::Node<'_, '_>) -> Vec<String> {
+    node.descendants()
+        .filter(|descendant| descendant.is_element() && has_epub_type(*descendant, "noteref"))
+        .filter_map(|descendant| descendant.attribute("href"))
+        .filter_map(|href| href.strip_prefix('#'))
+        .map(str::to_string)
+        .collect()
 }
 
 /// 输出图片块：`<img src>` 或 SVG `<image href>`。
@@ -143,13 +192,14 @@ fn svg_image_href(node: roxmltree::Node<'_, '_>) -> Option<String> {
         })
 }
 
-fn push_text(out: &mut Vec<ContentBlock>, kind: BlockKind, text: String) {
+fn push_text(out: &mut Vec<ContentBlock>, kind: BlockKind, text: String, note_refs: Vec<String>) {
     if text.trim().is_empty() {
         return;
     }
     out.push(ContentBlock::Text {
         kind,
         text: text.trim().to_string(),
+        note_refs,
     });
 }
 
@@ -231,7 +281,8 @@ mod tests {
             blocks[0],
             ContentBlock::Text {
                 kind: BlockKind::Paragraph,
-                text: "前图：".into()
+                text: "前图：".into(),
+                note_refs: vec![]
             },
             "图片前的文本应保留"
         );
@@ -246,7 +297,8 @@ mod tests {
             blocks[2],
             ContentBlock::Text {
                 kind: BlockKind::Paragraph,
-                text: "后文。".into()
+                text: "后文。".into(),
+                note_refs: vec![]
             },
             "图片后的文本应保留"
         );
@@ -277,32 +329,35 @@ mod tests {
             blocks[0],
             ContentBlock::Text {
                 kind: BlockKind::Paragraph,
-                text: "这是一句话[1]末尾。".into()
+                text: "这是一句话[1]末尾。".into(),
+                note_refs: vec!["fn1".into()]
             },
-            "noteref 应保留为可见标记 [1]"
+            "noteref 应保留为可见标记 [1]，并记录配对目标"
         );
         assert_eq!(
             blocks[1],
             ContentBlock::Text {
                 kind: BlockKind::Paragraph,
-                text: "第二段。".into()
+                text: "第二段。".into(),
+                note_refs: vec![]
             }
         );
         assert_eq!(
             blocks[2],
-            ContentBlock::Text {
-                kind: BlockKind::Footnote,
+            ContentBlock::Footnote {
+                id: Some("fn1".into()),
                 text: "脚注正文：解释这句话。\n补充一句。".into()
             },
-            "脚注应成为 Footnote 块：去掉回链、多段落换行"
+            "脚注应成为 Footnote 块：去掉回链、多段落换行、携带 id"
         );
         assert_eq!(
             blocks[3],
             ContentBlock::Text {
                 kind: BlockKind::Heading { level: 2 },
-                text: "标题[2]".into()
+                text: "标题[2]".into(),
+                note_refs: vec!["fn2".into()]
             },
-            "标题里的 noteref 也应规范为标记"
+            "标题里的 noteref 也应规范为标记并记录目标"
         );
     }
 
@@ -318,7 +373,8 @@ mod tests {
             blocks[0],
             ContentBlock::Text {
                 kind: BlockKind::Heading { level: 2 },
-                text: "第一节".into()
+                text: "第一节".into(),
+                note_refs: vec![]
             }
         );
         assert_eq!(

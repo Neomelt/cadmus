@@ -28,6 +28,7 @@
 - app v0.1.5：脚注显示（noteref 标记规范为 `[n]` 保留在正文，脚注正文渲染为小号脚注块，剔除回链箭头）
 - app v0.2.0：PDF 导入与重排阅读（重排一次缓存为 `assets/<id>/index.html`，二次打开秒开）；iOS 包内嵌 pdfium 动态库（chromium/8086，运行时按应用包路径加载）；新增 THIRD-PARTY.md
 - app v0.2.1：PDF 断字连字符合并（行尾连字符 + 小写续行去连字符；缺 Unicode 映射的连字符字形按控制符/非字符识别后同样处理）；重排缓存带版本号（`reflow-v1.html`，算法升级自动失效重排）
+- app v0.2.2：脚注配对（`noteref` 目标解析：章节末注/独立注释文件的脚注移动到引用段落之后；未引用的独立注释不进入正文）
 - CI：产出 cadmus-cli Linux 发布产物（Actions artifact）
 
 ### 变更

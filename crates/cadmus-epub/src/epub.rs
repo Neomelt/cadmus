@@ -1,5 +1,9 @@
 //! EPUB 解析（DESIGN-ENGINE §4.3）：容器 → OPF → spine 顺序的块序列。
+//!
+//! 脚注配对：`noteref` 引用的脚注（章节末注或独立注释文件）移动到引用块之后；
+//! 独立注释文件中未被引用的脚注不进入正文。
 
+use std::collections::{HashMap, HashSet};
 use std::io::{Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 
@@ -87,6 +91,12 @@ pub fn parse_epub_bytes(bytes: &[u8], options: &EpubOptions) -> Result<(Document
 
     let mut blocks: Vec<Block> = Vec::new();
     let mut order = 0u32;
+    // noteref 目标（块下标 → 目标 id）与脚注索引（id → 块下标），用于“紧随其后”配对。
+    let mut note_refs: Vec<(usize, Vec<String>)> = Vec::new();
+    let mut footnotes: HashMap<String, usize> = HashMap::new();
+    // 独立注释文件（不在 spine）里的脚注池：仅保留被引用的。
+    let mut note_pool: Vec<Block> = Vec::new();
+    let mut pool_notes: HashMap<String, usize> = HashMap::new();
 
     for (spine_index, idref) in opf.spine.iter().enumerate() {
         let Some(item) = opf.manifest.iter().find(|item| &item.id == idref) else {
@@ -116,7 +126,12 @@ pub fn parse_epub_bytes(bytes: &[u8], options: &EpubOptions) -> Result<(Document
 
         for content_block in content_blocks {
             match content_block {
-                ContentBlock::Text { kind, text } => {
+                ContentBlock::Text {
+                    kind,
+                    text,
+                    note_refs: refs,
+                } => {
+                    let block_index = blocks.len();
                     blocks.push(Block::text(
                         stable_block_id(doc_hash, chapter_index, seq),
                         kind,
@@ -125,6 +140,23 @@ pub fn parse_epub_bytes(bytes: &[u8], options: &EpubOptions) -> Result<(Document
                     ));
                     order += 1;
                     seq += 1;
+                    if !refs.is_empty() {
+                        note_refs.push((block_index, refs));
+                    }
+                }
+                ContentBlock::Footnote { id, text } => {
+                    let block_index = blocks.len();
+                    blocks.push(Block::text(
+                        stable_block_id(doc_hash, chapter_index, seq),
+                        BlockKind::Footnote,
+                        order,
+                        text,
+                    ));
+                    order += 1;
+                    seq += 1;
+                    if let Some(id) = id {
+                        footnotes.entry(id).or_insert(block_index);
+                    }
                 }
                 ContentBlock::Image { src } => {
                     let image_path = resolve_path(&chapter_dir, &src);
@@ -170,10 +202,102 @@ pub fn parse_epub_bytes(bytes: &[u8], options: &EpubOptions) -> Result<(Document
         }
     }
 
+    // 独立注释文件（manifest 中不在 spine 的 xhtml）：只提取脚注，供 noteref 配对。
+    let spine_ids: HashSet<&str> = opf.spine.iter().map(String::as_str).collect();
+    for (file_index, item) in opf.manifest.iter().enumerate() {
+        if spine_ids.contains(item.id.as_str()) {
+            continue;
+        }
+        if !item.media_type.contains("xhtml") && !item.href.ends_with(".xhtml") {
+            continue;
+        }
+        let href = resolve_path(&base_dir, &item.href);
+        let Ok(xhtml) = read_string(&mut archive, &href) else {
+            continue;
+        };
+        let Ok(content_blocks) = content::parse(&xhtml) else {
+            continue;
+        };
+        let chapter_index = opf.spine.len() as u32 + file_index as u32;
+        for (seq, content_block) in content_blocks.into_iter().enumerate() {
+            let ContentBlock::Footnote { id: Some(id), text } = content_block else {
+                continue;
+            };
+            if footnotes.contains_key(&id) || pool_notes.contains_key(&id) {
+                continue;
+            }
+            let pool_index = note_pool.len();
+            note_pool.push(Block::text(
+                stable_block_id(doc_hash, chapter_index, seq as u32),
+                BlockKind::Footnote,
+                0,
+                text,
+            ));
+            pool_notes.insert(id, pool_index);
+        }
+    }
+
+    // 配对：被引用的脚注移到引用块之后（章节末注与独立注释文件都适用；未引用的丢弃）。
+    enum NoteHome {
+        Inline(usize),
+        Pool(usize),
+    }
+    let mut after: HashMap<usize, Vec<NoteHome>> = HashMap::new();
+    let mut moved_inline: HashSet<usize> = HashSet::new();
+    let mut moved_pool: HashSet<usize> = HashSet::new();
+    for (anchor, refs) in &note_refs {
+        for key in refs {
+            if let Some(&note_index) = footnotes.get(key)
+                && note_index > *anchor
+                && moved_inline.insert(note_index)
+            {
+                after
+                    .entry(*anchor)
+                    .or_default()
+                    .push(NoteHome::Inline(note_index));
+                continue;
+            }
+            if let Some(&pool_index) = pool_notes.get(key)
+                && moved_pool.insert(pool_index)
+            {
+                after
+                    .entry(*anchor)
+                    .or_default()
+                    .push(NoteHome::Pool(pool_index));
+            }
+        }
+    }
+
+    let mut slots: Vec<Option<Block>> = blocks.into_iter().map(Some).collect();
+    let mut ordered: Vec<Block> = Vec::with_capacity(slots.len() + note_pool.len());
+    for index in 0..slots.len() {
+        if moved_inline.contains(&index) {
+            continue;
+        }
+        if let Some(block) = slots[index].take() {
+            ordered.push(block);
+        }
+        if let Some(homes) = after.get(&index) {
+            for home in homes {
+                match home {
+                    NoteHome::Inline(note_index) => {
+                        if let Some(block) = slots[*note_index].take() {
+                            ordered.push(block);
+                        }
+                    }
+                    NoteHome::Pool(pool_index) => ordered.push(note_pool[*pool_index].clone()),
+                }
+            }
+        }
+    }
+    for (index, block) in ordered.iter_mut().enumerate() {
+        block.order = index as u32;
+    }
+
     let document = Document {
         doc_hash,
         title: opf.title,
-        blocks,
+        blocks: ordered,
     };
     Ok((document, report))
 }
@@ -271,6 +395,92 @@ mod tests {
             writer.finish().unwrap();
         }
         buffer.into_inner()
+    }
+
+    /// 同一文件内的章节末注：脚注应移到引用段落之后；独立注释文件仅提取被引用的脚注。
+    fn build_footnote_epub() -> Vec<u8> {
+        let opf = r#"<?xml version="1.0"?>
+        <package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+          <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+            <dc:title>带注书</dc:title>
+          </metadata>
+          <manifest>
+            <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+            <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+            <item id="notes" href="notes.xhtml" media-type="application/xhtml+xml"/>
+          </manifest>
+          <spine><itemref idref="ch1"/><itemref idref="ch2"/></spine>
+        </package>"#;
+        let ch1 = r##"<?xml version="1.0"?>
+        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
+          <p>第一段<a epub:type="noteref" href="#n1">1</a>结束。</p>
+          <p>第二段。</p>
+          <aside epub:type="footnote" id="n1">注一。</aside>
+        </body></html>"##;
+        let ch2 = r##"<?xml version="1.0"?>
+        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
+          <p>第三段<a epub:type="noteref" href="#n2">2</a>结束。</p>
+        </body></html>"##;
+        // 独立注释文件：不在 spine，只有脚注；n3 无人引用。
+        let notes = r##"<?xml version="1.0"?>
+        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
+          <aside epub:type="footnote" id="n2">注二。</aside>
+          <aside epub:type="footnote" id="n3">注三（应被丢弃）。</aside>
+        </body></html>"##;
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default();
+            writer.start_file("mimetype", options).unwrap();
+            writer.write_all(b"application/epub+zip").unwrap();
+            writer
+                .start_file("META-INF/container.xml", options)
+                .unwrap();
+            writer.write_all(CONTAINER.as_bytes()).unwrap();
+            writer.start_file("OEBPS/content.opf", options).unwrap();
+            writer.write_all(opf.as_bytes()).unwrap();
+            writer.start_file("OEBPS/ch1.xhtml", options).unwrap();
+            writer.write_all(ch1.as_bytes()).unwrap();
+            writer.start_file("OEBPS/ch2.xhtml", options).unwrap();
+            writer.write_all(ch2.as_bytes()).unwrap();
+            writer.start_file("OEBPS/notes.xhtml", options).unwrap();
+            writer.write_all(notes.as_bytes()).unwrap();
+            writer.finish().unwrap();
+        }
+        buffer.into_inner()
+    }
+
+    #[test]
+    fn footnotes_follow_referencing_paragraph() {
+        let bytes = build_footnote_epub();
+        let (document, _report) = parse_epub_bytes(&bytes, &EpubOptions::default()).unwrap();
+        let kinds: Vec<BlockKind> = document.blocks.iter().map(|block| block.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                BlockKind::Paragraph,
+                BlockKind::Footnote,
+                BlockKind::Paragraph,
+                BlockKind::Paragraph,
+                BlockKind::Footnote,
+            ],
+            "脚注应移到引用段落之后（含独立注释文件），未引用的脚注丢弃"
+        );
+        let texts: Vec<Option<&str>> = document
+            .blocks
+            .iter()
+            .map(|block| block.as_text())
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                Some("第一段[1]结束。"),
+                Some("注一。"),
+                Some("第二段。"),
+                Some("第三段[2]结束。"),
+                Some("注二。"),
+            ]
+        );
     }
 
     #[test]
