@@ -5,6 +5,7 @@
 | 版本 | 日期 | 修改人 | 变更内容 |
 |---|---|---|---|
 | v1.0 | 2026-10-11 | Neomelt | 初始版本 |
+| v1.1 | 2026-10-12 | Neomelt | 脚注配对语义（noteref 目标解析、注释跟随引用段落、未引用独立注释丢弃）；PDF 行拼接断字连字符规则 |
 
 **状态**：评审通过
 
@@ -182,7 +183,7 @@ crates/cadmus-reflow/src/
 1. **parse**：逐字符提取 `GlyphBox { ch, x, y, w, h, size, font, rotation }`；跳过不可见字形（render mode 3）；同时保留矢量路径与图像区域（供表格/图形判定）。
 2. **lines**：按 y 容差分组、组内按 x 排序，得到 `TextLine`（含 bbox、基线、中位字号）。
 3. **columns**：把行 bbox 投影到 x 轴求谷；`cut` 的宽度阈值 ≥ 2× 中位字高且两侧文本量显著 [待定]。结论为 Single/Double/Multi + 置信度；置信度低时走 fallback。
-4. **paragraphs**：同栏内相邻行合并为段落，新段条件（满足其一）：行距 > 1.2× 中位行距、首行缩进、上一行以句末标点结尾且填充率 < 80% [待定三者默认值]。
+4. **paragraphs**：同栏内相邻行合并为段落，新段条件（满足其一）：行距 > 1.2× 中位行距、首行缩进、上一行以句末标点结尾且填充率 < 80% [待定三者默认值]。行拼接：ASCII 词间补空格；行尾连字符 + 小写续行去连字符直连（`expe-`+`riencing` → `experiencing`）；缺 Unicode 映射的连字符字形（控制符/非字符）按连字符处理，行内噪声字符丢弃 [待定：启发式集合]。
 5. **regions**：分类规则（M1 最小集）：
    - 标题：字号 ≥ 正文 ×1.2 或加粗，且为短行；
    - 公式：居中 + 数学字体（`CMMI`/`CMSY`/`CMEX`/`STIX`/`Symbol` 等，名单可扩展 [待定]）；
@@ -197,7 +198,7 @@ crates/cadmus-reflow/src/
 
 - 文件：`src/container.rs`（zip → `container.xml` → OPF 路径）、`src/opf.rs`（metadata/manifest/spine）、`src/content.rs`（XHTML → 块序列）。
 - XHTML 解析用现成 XML 解析器（`quick-xml` [待定：默认]），转换规则：`h1–h6` → `Heading`，`p` → `Paragraph`，`img` → `Figure`（位图块），`table` → `Table`（位图或文本块 [待定：默认文本]），`pre/code` → `Code`。
-- 脚注：`epub:type="noteref"` 的行内标记保留为文本标记，脚注正文作为 `Footnote` 块紧随其后。
+- 脚注：`epub:type="noteref"` 的行内标记规范为 `[n]` 保留在正文（标题/表格同样处理），noteref 的 `href` 目标被记录；脚注正文（`epub:type="footnote"`，去回链）解析为 `Footnote` 块，按目标配对后移动到引用块之后（章节末注）或插入引用块之后（独立注释文件、不在 spine）；独立注释文件中未被引用的脚注不进入正文。
 - 阅读顺序 = spine 顺序；单章失败跳过并 stderr 警告。
 
 ### 4.4 cadmus-epub — TXT 解析（`crates/cadmus-epub/`）

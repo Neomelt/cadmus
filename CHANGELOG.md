@@ -32,6 +32,7 @@
 - CI：产出 cadmus-cli Linux 发布产物（Actions artifact）
 
 ### 变更
+- DESIGN-ENGINE v1.1：脚注配对语义（noteref 目标解析、注释跟随引用段落、未引用独立注释丢弃）；PDF 行拼接断字连字符规则
 - PRODUCT v1.1：设备范围明确（iOS 仅 iPad、手机仅 Android，D11）；FR-2.11 提为 M；补问题④；非目标格式与 DRM；性能基线
 - ARCHITECTURE v0.3：设备范围对齐；批注导出模板；性能基线
 - CRITERIA v0.3：CR-1 视口修正；CR-3/4/9 对齐 M2；性能基线

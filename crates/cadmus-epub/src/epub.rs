@@ -89,14 +89,19 @@ pub fn parse_epub_bytes(bytes: &[u8], options: &EpubOptions) -> Result<(Document
         }
     }
 
+    /// 脚注所在：正文块（配对时向前移动）或独立注释池（配对时插入）。
+    #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+    enum NoteSource {
+        Inline(usize),
+        Pool(usize),
+    }
     let mut blocks: Vec<Block> = Vec::new();
     let mut order = 0u32;
-    // noteref 目标（块下标 → 目标 id）与脚注索引（id → 块下标），用于“紧随其后”配对。
-    let mut note_refs: Vec<(usize, Vec<String>)> = Vec::new();
-    let mut footnotes: HashMap<String, usize> = HashMap::new();
+    // noteref 目标（块下标、章节、目标 id）与脚注候选（id → （章节, 所在）），用于配对。
+    let mut note_refs: Vec<(usize, u32, Vec<String>)> = Vec::new();
+    let mut notes: HashMap<String, Vec<(u32, NoteSource)>> = HashMap::new();
     // 独立注释文件（不在 spine）里的脚注池：仅保留被引用的。
     let mut note_pool: Vec<Block> = Vec::new();
-    let mut pool_notes: HashMap<String, usize> = HashMap::new();
 
     for (spine_index, idref) in opf.spine.iter().enumerate() {
         let Some(item) = opf.manifest.iter().find(|item| &item.id == idref) else {
@@ -141,7 +146,7 @@ pub fn parse_epub_bytes(bytes: &[u8], options: &EpubOptions) -> Result<(Document
                     order += 1;
                     seq += 1;
                     if !refs.is_empty() {
-                        note_refs.push((block_index, refs));
+                        note_refs.push((block_index, chapter_index, refs));
                     }
                 }
                 ContentBlock::Footnote { id, text } => {
@@ -155,7 +160,10 @@ pub fn parse_epub_bytes(bytes: &[u8], options: &EpubOptions) -> Result<(Document
                     order += 1;
                     seq += 1;
                     if let Some(id) = id {
-                        footnotes.entry(id).or_insert(block_index);
+                        notes
+                            .entry(id)
+                            .or_default()
+                            .push((chapter_index, NoteSource::Inline(block_index)));
                     }
                 }
                 ContentBlock::Image { src } => {
@@ -223,9 +231,6 @@ pub fn parse_epub_bytes(bytes: &[u8], options: &EpubOptions) -> Result<(Document
             let ContentBlock::Footnote { id: Some(id), text } = content_block else {
                 continue;
             };
-            if footnotes.contains_key(&id) || pool_notes.contains_key(&id) {
-                continue;
-            }
             let pool_index = note_pool.len();
             note_pool.push(Block::text(
                 stable_block_id(doc_hash, chapter_index, seq as u32),
@@ -233,45 +238,57 @@ pub fn parse_epub_bytes(bytes: &[u8], options: &EpubOptions) -> Result<(Document
                 0,
                 text,
             ));
-            pool_notes.insert(id, pool_index);
+            notes
+                .entry(id)
+                .or_default()
+                .push((chapter_index, NoteSource::Pool(pool_index)));
         }
     }
 
-    // 配对：被引用的脚注移到引用块之后（章节末注与独立注释文件都适用；未引用的丢弃）。
-    enum NoteHome {
-        Inline(usize),
-        Pool(usize),
-    }
-    let mut after: HashMap<usize, Vec<NoteHome>> = HashMap::new();
-    let mut moved_inline: HashSet<usize> = HashSet::new();
-    let mut moved_pool: HashSet<usize> = HashSet::new();
-    for (anchor, refs) in &note_refs {
+    // 配对（两轮）：优先同章节匹配（各章 id 常各自从 1 编号），再按 id 全局兜底；
+    // 被引用的脚注移动到引用块之后（不区分源位置），未引用的独立注释丢弃。
+    let mut after: HashMap<usize, Vec<NoteSource>> = HashMap::new();
+    let mut moved: HashSet<NoteSource> = HashSet::new();
+    let mut pending: Vec<(usize, String)> = Vec::new();
+    for (anchor, chapter, refs) in &note_refs {
         for key in refs {
-            if let Some(&note_index) = footnotes.get(key)
-                && note_index > *anchor
-                && moved_inline.insert(note_index)
-            {
-                after
-                    .entry(*anchor)
-                    .or_default()
-                    .push(NoteHome::Inline(note_index));
-                continue;
-            }
-            if let Some(&pool_index) = pool_notes.get(key)
-                && moved_pool.insert(pool_index)
-            {
-                after
-                    .entry(*anchor)
-                    .or_default()
-                    .push(NoteHome::Pool(pool_index));
+            let local = notes.get(key).and_then(|candidates| {
+                candidates
+                    .iter()
+                    .find(|(note_chapter, source)| {
+                        note_chapter == chapter && !moved.contains(source)
+                    })
+                    .map(|(_, source)| *source)
+            });
+            match local {
+                Some(source) => {
+                    moved.insert(source);
+                    after.entry(*anchor).or_default().push(source);
+                }
+                None => pending.push((*anchor, key.clone())),
             }
         }
+    }
+    for (anchor, key) in pending {
+        // 全局兜底只连注释池（跨文件注释）：避免把别章的 in-spine 脚注错配过来。
+        let Some(source) = notes.get(&key).and_then(|candidates| {
+            candidates
+                .iter()
+                .find(|(_, source)| {
+                    matches!(source, NoteSource::Pool(_)) && !moved.contains(source)
+                })
+                .map(|(_, source)| *source)
+        }) else {
+            continue;
+        };
+        moved.insert(source);
+        after.entry(anchor).or_default().push(source);
     }
 
     let mut slots: Vec<Option<Block>> = blocks.into_iter().map(Some).collect();
     let mut ordered: Vec<Block> = Vec::with_capacity(slots.len() + note_pool.len());
     for index in 0..slots.len() {
-        if moved_inline.contains(&index) {
+        if moved.contains(&NoteSource::Inline(index)) {
             continue;
         }
         if let Some(block) = slots[index].take() {
@@ -280,12 +297,12 @@ pub fn parse_epub_bytes(bytes: &[u8], options: &EpubOptions) -> Result<(Document
         if let Some(homes) = after.get(&index) {
             for home in homes {
                 match home {
-                    NoteHome::Inline(note_index) => {
+                    NoteSource::Inline(note_index) => {
                         if let Some(block) = slots[*note_index].take() {
                             ordered.push(block);
                         }
                     }
-                    NoteHome::Pool(pool_index) => ordered.push(note_pool[*pool_index].clone()),
+                    NoteSource::Pool(pool_index) => ordered.push(note_pool[*pool_index].clone()),
                 }
             }
         }
@@ -416,6 +433,8 @@ mod tests {
           <p>第一段<a epub:type="noteref" href="#n1">1</a>结束。</p>
           <p>第二段。</p>
           <aside epub:type="footnote" id="n1">注一。</aside>
+          <aside epub:type="footnote" id="n4">前注。</aside>
+          <p>第四段<a epub:type="noteref" href="#n4">4</a>结束。</p>
         </body></html>"##;
         let ch2 = r##"<?xml version="1.0"?>
         <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
@@ -463,8 +482,10 @@ mod tests {
                 BlockKind::Paragraph,
                 BlockKind::Paragraph,
                 BlockKind::Footnote,
+                BlockKind::Paragraph,
+                BlockKind::Footnote,
             ],
-            "脚注应移到引用段落之后（含独立注释文件），未引用的脚注丢弃"
+            "脚注应移到引用段落之后（含前注与独立注释文件），未引用的脚注丢弃"
         );
         let texts: Vec<Option<&str>> = document
             .blocks
@@ -477,9 +498,64 @@ mod tests {
                 Some("第一段[1]结束。"),
                 Some("注一。"),
                 Some("第二段。"),
+                Some("第四段[4]结束。"),
+                Some("前注。"),
                 Some("第三段[2]结束。"),
                 Some("注二。"),
             ]
+        );
+    }
+
+    /// 两章各自拥有同 id（#fn1）的引用：只能各配各的，不跨章错配。
+    #[test]
+    fn pairs_notes_within_same_chapter_first() {
+        let opf = r#"<?xml version="1.0"?>
+        <package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+          <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>双章注</dc:title></metadata>
+          <manifest>
+            <item id="a" href="a.xhtml" media-type="application/xhtml+xml"/>
+            <item id="b" href="b.xhtml" media-type="application/xhtml+xml"/>
+          </manifest>
+          <spine><itemref idref="a"/><itemref idref="b"/></spine>
+        </package>"#;
+        let a = r##"<?xml version="1.0"?>
+        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
+          <p>甲<a epub:type="noteref" href="#fn1">1</a>。</p>
+        </body></html>"##;
+        let b = r##"<?xml version="1.0"?>
+        <html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
+          <p>乙<a epub:type="noteref" href="#fn1">1</a>。</p>
+          <aside epub:type="footnote" id="fn1">乙注。</aside>
+        </body></html>"##;
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default();
+            writer.start_file("mimetype", options).unwrap();
+            writer.write_all(b"application/epub+zip").unwrap();
+            writer
+                .start_file("META-INF/container.xml", options)
+                .unwrap();
+            writer.write_all(CONTAINER.as_bytes()).unwrap();
+            writer.start_file("OEBPS/content.opf", options).unwrap();
+            writer.write_all(opf.as_bytes()).unwrap();
+            writer.start_file("OEBPS/a.xhtml", options).unwrap();
+            writer.write_all(a.as_bytes()).unwrap();
+            writer.start_file("OEBPS/b.xhtml", options).unwrap();
+            writer.write_all(b.as_bytes()).unwrap();
+            writer.finish().unwrap();
+        }
+        let bytes = buffer.into_inner();
+        let (document, _report) = parse_epub_bytes(&bytes, &EpubOptions::default()).unwrap();
+        let texts: Vec<Option<&str>> = document
+            .blocks
+            .iter()
+            .map(|block| block.as_text())
+            .collect();
+        assert_eq!(
+            texts,
+            vec![Some("甲[1]。"), Some("乙[1]。"), Some("乙注。")],
+            "甲的引用不应偷走乙章的脚注"
         );
     }
 

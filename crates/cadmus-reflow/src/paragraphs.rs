@@ -163,10 +163,10 @@ fn append_line(text: &mut String, line: &TextLine) {
     if addition.is_empty() {
         return;
     }
-    if trailing_noise {
+    if trailing_noise && !addition.ends_with(is_break_hyphen) {
         addition.push('-');
     }
-    let lowercase_next = addition
+    let next_starts_lowercase = addition
         .chars()
         .next()
         .is_some_and(|ch| ch.is_ascii_lowercase());
@@ -174,7 +174,7 @@ fn append_line(text: &mut String, line: &TextLine) {
     let trimmed = text.trim_end();
     if trimmed.chars().last().is_some_and(is_break_hyphen) {
         text.truncate(trimmed.len());
-        if lowercase_next {
+        if next_starts_lowercase {
             text.pop(); // 断字连接：丢掉连字符，直接接上
         }
         text.push_str(&addition);
@@ -194,14 +194,18 @@ fn append_line(text: &mut String, line: &TextLine) {
     text.push_str(&addition);
 }
 
-/// 断行连字符：ASCII `-` 与 Unicode 连字符 U+2010/U+2011。
+/// 断行连字符：ASCII `-` 与 Unicode 连字符 U+2010/U+2011。[待定：启发式集合]
 fn is_break_hyphen(ch: char) -> bool {
     matches!(ch, '-' | '\u{2010}' | '\u{2011}')
 }
 
-/// 不可映射字符：非字符 U+FFFE/U+FFFD 与控制符（空白除外）。
+/// 不可映射字符：控制符（空白除外）、替换符 U+FFFD 与 Unicode 非字符。[待定：启发式集合]
 fn is_noise_char(ch: char) -> bool {
-    matches!(ch, '\u{FFFE}' | '\u{FFFD}') || (ch.is_control() && !ch.is_whitespace())
+    let code = ch as u32;
+    (ch.is_control() && !ch.is_whitespace())
+        || ch == '\u{FFFD}'
+        || (code & 0xFFFF) >= 0xFFFE
+        || (0xFDD0..=0xFDEF).contains(&code)
 }
 
 /// 数学字体名单（[待定] 可扩展）。
@@ -295,6 +299,12 @@ mod tests {
         append_line(&mut text, &line("hel\u{FFFE}lo", 50.0, 100.0));
         append_line(&mut text, &line("world", 50.0, 112.0));
         assert_eq!(text, "hello world");
+
+        // 真连字符 + 控制符叠加：不产生双连字符。
+        let mut text = String::new();
+        append_line(&mut text, &line("expe-\u{2}", 50.0, 100.0));
+        append_line(&mut text, &line("riencing", 50.0, 112.0));
+        assert_eq!(text, "experiencing");
     }
 
     #[test]
