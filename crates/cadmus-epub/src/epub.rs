@@ -134,20 +134,25 @@ pub fn parse_epub_bytes(bytes: &[u8], options: &EpubOptions) -> Result<(Document
                         height_px: 0,
                     };
                     if let Some(out_dir) = &options.out_dir {
-                        match read_bytes(&mut archive, &image_path) {
-                            Ok(data) => {
-                                let file = out_dir.join(format!(
-                                    "epub-{chapter_index}-{seq}{}",
-                                    extension_of(&image_path)
-                                ));
-                                if let Err(error) = std::fs::write(&file, data) {
-                                    report.warnings.push(format!("图片导出失败：{error}"));
-                                } else {
-                                    bitmap.path = file.display().to_string();
+                        let file = out_dir.join(format!(
+                            "epub-{chapter_index}-{seq}{}",
+                            extension_of(&image_path)
+                        ));
+                        if file.exists() {
+                            // 已导出过（内容寻址：同书同章同位同文件），复用而不重写。
+                            bitmap.path = file.display().to_string();
+                        } else {
+                            match read_bytes(&mut archive, &image_path) {
+                                Ok(data) => {
+                                    if let Err(error) = std::fs::write(&file, data) {
+                                        report.warnings.push(format!("图片导出失败：{error}"));
+                                    } else {
+                                        bitmap.path = file.display().to_string();
+                                    }
                                 }
-                            }
-                            Err(_) => {
-                                report.warnings.push(format!("图片缺失：{image_path}"));
+                                Err(_) => {
+                                    report.warnings.push(format!("图片缺失：{image_path}"));
+                                }
                             }
                         }
                     }

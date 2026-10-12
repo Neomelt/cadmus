@@ -3,15 +3,16 @@
 //! 目录布局：
 //! ```text
 //! <data>/
-//! ├─ library.json        # 索引
-//! ├─ books/<id>.<ext>    # 书文件
-//! └─ covers/<id>/cover.* # 封面（由解析器导出）
+//! ├─ library.json          # 索引
+//! ├─ books/<id>.<ext>      # 书文件
+//! └─ assets/<id>/cover.*   # 封面与正文图片（由解析器导出）
 //! ```
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +33,11 @@ pub struct BookEntry {
 
 fn lib_path(dir: &Path) -> PathBuf {
     dir.join("library.json")
+}
+
+/// 一本书的导出资产目录（封面 + 正文图片）。
+fn assets_dir(dir: &Path, id: &str) -> PathBuf {
+    dir.join("assets").join(id)
 }
 
 fn now() -> u64 {
@@ -72,11 +78,12 @@ pub fn ingest(
 
     let (title, author, cover) = match ext {
         "epub" => {
-            let covers = dir.join("covers").join(&id);
+            // 解析时导出封面与正文图片到 assets/<id>/。
+            let assets = assets_dir(dir, &id);
             let (document, report) = cadmus_epub::parse_epub_bytes(
                 bytes,
                 &cadmus_epub::EpubOptions {
-                    out_dir: Some(covers),
+                    out_dir: Some(assets),
                 },
             )
             .map_err(|error| format!("EPUB 解析失败：{error}"))?;
@@ -142,12 +149,19 @@ pub fn read_entry(dir: &Path, id: &str) -> Result<String, String> {
                 &document,
                 Some(entry.title.as_str()),
                 entry.author.as_deref(),
+                entry.cover.as_deref(),
             )
         }
         _ => {
-            let (document, report) =
-                cadmus_epub::parse_epub_bytes(&bytes, &cadmus_epub::EpubOptions::default())
-                    .map_err(|error| error.to_string())?;
+            // 解析时把正文图片导出到 assets/<id>/，位图块路径即可直接内联。
+            let assets = assets_dir(dir, &entry.id);
+            let (document, report) = cadmus_epub::parse_epub_bytes(
+                &bytes,
+                &cadmus_epub::EpubOptions {
+                    out_dir: Some(assets),
+                },
+            )
+            .map_err(|error| error.to_string())?;
             render_document(
                 &document,
                 document.title.as_deref().or(Some(entry.title.as_str())),
@@ -156,6 +170,8 @@ pub fn read_entry(dir: &Path, id: &str) -> Result<String, String> {
                     .first()
                     .map(String::as_str)
                     .or(entry.author.as_deref()),
+                // 旧数据封面可能存在别处，索引里的路径优先。
+                entry.cover.as_deref().or(report.cover_path.as_deref()),
             )
         }
     }
@@ -165,14 +181,58 @@ fn render_document(
     document: &cadmus_core::Document,
     title: Option<&str>,
     author: Option<&str>,
+    cover: Option<&str>,
 ) -> Result<String, String> {
     let meta = cadmus_preview::PreviewMeta {
         title: title.unwrap_or("未命名"),
         byline: author,
-        cover: None,
+        cover,
+        asset_src: Some(&asset_data_url),
     };
     cadmus_preview::render_to_string(document, Path::new(""), &meta)
         .map_err(|error| error.to_string())
+}
+
+/// 内联图片体积上限：超过则不内联（避免阅读 HTML 失控）。
+const MAX_INLINE_ASSET: u64 = 2_500_000;
+
+/// 位图路径 → data URL；不可用（缺失/过大）时返回空串（渲染端会整体省略）。
+fn asset_data_url(path: &str) -> String {
+    data_url(path, MAX_INLINE_ASSET).unwrap_or_default()
+}
+
+/// 文件 → data URL；读取失败或超过 `max_bytes` 返回 `None`（书库封面与正文图片共用）。
+pub(crate) fn data_url(path: &str, max_bytes: u64) -> Option<String> {
+    let meta = fs::metadata(path).ok()?;
+    if meta.len() > max_bytes {
+        return None;
+    }
+    let bytes = fs::read(path).ok()?;
+    Some(format!(
+        "data:{};base64,{}",
+        mime_for(path),
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    ))
+}
+
+/// 扩展名 → MIME（未知格式按 JPEG 兜底）。
+pub(crate) fn mime_for(path: &str) -> &'static str {
+    let path = path.to_ascii_lowercase();
+    if path.ends_with(".png") {
+        "image/png"
+    } else if path.ends_with(".gif") {
+        "image/gif"
+    } else if path.ends_with(".svg") {
+        "image/svg+xml"
+    } else if path.ends_with(".webp") {
+        "image/webp"
+    } else if path.ends_with(".avif") {
+        "image/avif"
+    } else if path.ends_with(".bmp") {
+        "image/bmp"
+    } else {
+        "image/jpeg"
+    }
 }
 
 /// 删除一本书（内置书不可删除）。
@@ -186,7 +246,10 @@ pub fn delete_entry(dir: &Path, id: &str) -> Result<(), String> {
     }
     let entry = entries.remove(position);
     let _ = fs::remove_file(&entry.file);
+    // 清掉整份导出资产（封面 + 正文图片）。
+    let _ = fs::remove_dir_all(assets_dir(dir, &entry.id));
     if let Some(cover) = &entry.cover {
+        // 兼容旧数据：封面可能存放在 covers/<id>/。
         let _ = fs::remove_file(cover);
         if let Some(parent) = Path::new(cover).parent() {
             let _ = fs::remove_dir(parent);
@@ -213,6 +276,93 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("cadmus-lib-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         dir
+    }
+
+    /// 最小含图 EPUB：正文段落内嵌图（覆盖 `<p>文字<img/></p>` 混排路径）+ 一个缺失图引用。
+    fn build_epub_with_image(image: &[u8]) -> Vec<u8> {
+        use std::io::Write as _;
+        let container = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>图册</dc:title>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="pic" href="pic.png" media-type="image/png"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        let chapter = r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body>
+  <h1>第一章 有图</h1>
+  <p>前面是图：<img src="pic.png" alt="插"/>后面是字。</p>
+  <img src="missing.png" alt="缺失"/>
+</body></html>"#;
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        {
+            let mut writer = zip::ZipWriter::new(&mut buffer);
+            let options = zip::write::SimpleFileOptions::default();
+            writer.start_file("mimetype", options).unwrap();
+            writer.write_all(b"application/epub+zip").unwrap();
+            writer
+                .start_file("META-INF/container.xml", options)
+                .unwrap();
+            writer.write_all(container.as_bytes()).unwrap();
+            writer.start_file("OEBPS/content.opf", options).unwrap();
+            writer.write_all(opf.as_bytes()).unwrap();
+            writer.start_file("OEBPS/ch1.xhtml", options).unwrap();
+            writer.write_all(chapter.as_bytes()).unwrap();
+            writer.start_file("OEBPS/pic.png", options).unwrap();
+            writer.write_all(image).unwrap();
+            writer.finish().unwrap();
+        }
+        buffer.into_inner()
+    }
+
+    fn tiny_png() -> Vec<u8> {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+            .unwrap()
+    }
+
+    #[test]
+    fn imported_images_render_inline() {
+        let dir = temp_dir("img");
+        let bytes = build_epub_with_image(&tiny_png());
+        let entry = ingest(&dir, &bytes, "epub", "图册", false, Some("img1".into())).unwrap();
+        let html = read_entry(&dir, &entry.id).unwrap();
+        assert!(
+            html.contains("data:image/png;base64,"),
+            "段落内图片应内联为 data URL，实际片段：{}",
+            &html[..html.len().min(400)]
+        );
+        assert!(
+            html.contains("前面是图") && html.contains("后面是字"),
+            "图片前后正文都应保留"
+        );
+        assert!(
+            !html.contains("missing.png"),
+            "缺失图片应整体省略，不出现裂图"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn oversize_images_are_omitted_not_broken() {
+        let dir = temp_dir("bigimg");
+        // 2.6 MB 大图：超过内联上限（2.5 MB）时整块省略。
+        let big: Vec<u8> = (0..2_600_000u32).map(|i| (i % 251) as u8).collect();
+        let bytes = build_epub_with_image(&big);
+        let entry = ingest(&dir, &bytes, "epub", "大图册", false, Some("big1".into())).unwrap();
+        let html = read_entry(&dir, &entry.id).unwrap();
+        assert!(!html.contains("<figure"), "超限图片应省略而非裂图");
+        assert!(html.contains("后面是字"), "正文不受大图影响");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

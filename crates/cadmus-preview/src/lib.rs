@@ -6,7 +6,7 @@
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
-use cadmus_core::{BitmapRef, Block, BlockKind, Document, Payload, Result};
+use cadmus_core::{Block, BlockKind, Document, Payload, Result};
 
 /// 预览元信息。
 pub struct PreviewMeta<'a> {
@@ -15,6 +15,8 @@ pub struct PreviewMeta<'a> {
     pub byline: Option<&'a str>,
     /// 封面路径（可为 out_dir 内的绝对路径）。
     pub cover: Option<&'a str>,
+    /// 位图/封面路径 → 可用的 src（如 data URL）；`None` 时使用相对 `base` 的路径。
+    pub asset_src: Option<&'a dyn Fn(&str) -> String>,
 }
 
 const HEAD: &str = r#"<!doctype html>
@@ -225,11 +227,14 @@ pub fn render_to_string(
     html.push_str("<main id=\"content\">\n");
 
     if let Some(cover) = meta.cover {
-        let _ = writeln!(
-            html,
-            "<img class=\"cover\" src=\"{}\" alt=\"cover\">",
-            escape(&relative(cover, base))
-        );
+        let src = src_for(cover, meta, base);
+        if !src.is_empty() {
+            let _ = writeln!(
+                html,
+                "<img class=\"cover\" src=\"{}\" alt=\"cover\">",
+                escape(&src)
+            );
+        }
     }
     if meta.cover.is_some() || meta.byline.is_some() {
         let _ = writeln!(html, "<h1>{}</h1>", escape(meta.title));
@@ -239,7 +244,7 @@ pub fn render_to_string(
     }
 
     for block in &document.blocks {
-        render_block(&mut html, block, base);
+        render_block(&mut html, block, base, meta);
     }
     let _ = writeln!(
         html,
@@ -260,7 +265,7 @@ pub fn render(document: &Document, out_dir: &Path, meta: &PreviewMeta<'_>) -> Re
     Ok(path)
 }
 
-fn render_block(html: &mut String, block: &Block, base: &Path) {
+fn render_block(html: &mut String, block: &Block, base: &Path, meta: &PreviewMeta<'_>) {
     match (&block.kind, &block.payload) {
         (BlockKind::Heading { level }, Payload::Text(text)) => {
             let tag = if *level <= 1 { "h1" } else { "h2" };
@@ -273,24 +278,35 @@ fn render_block(html: &mut String, block: &Block, base: &Path) {
             let _ = writeln!(html, "<p>{}</p>", escape(text));
         }
         (BlockKind::Formula, Payload::Bitmap(bitmap)) => {
-            let _ = writeln!(
-                html,
-                "<figure><img class=\"formula\" src=\"{}\" alt=\"formula\"></figure>",
-                escape(&relative_src(bitmap, base))
-            );
+            let src = src_for(&bitmap.path, meta, base);
+            if !src.is_empty() {
+                let _ = writeln!(
+                    html,
+                    "<figure><img class=\"formula\" src=\"{}\" alt=\"formula\"></figure>",
+                    escape(&src)
+                );
+            }
         }
         (_, Payload::Bitmap(bitmap)) => {
-            let _ = writeln!(
-                html,
-                "<figure><img src=\"{}\" alt=\"figure\"></figure>",
-                escape(&relative_src(bitmap, base))
-            );
+            let src = src_for(&bitmap.path, meta, base);
+            if !src.is_empty() {
+                let _ = writeln!(
+                    html,
+                    "<figure><img src=\"{}\" alt=\"figure\"></figure>",
+                    escape(&src)
+                );
+            }
         }
     }
 }
 
-fn relative_src(bitmap: &BitmapRef, base: &Path) -> String {
-    relative(&bitmap.path, base)
+/// 位图路径 → src：优先使用调用方提供的解析器，否则回退为相对 `base` 的路径。
+/// 返回空串表示该位图不可用（调用方应整体省略，避免裂图）。
+fn src_for(path: &str, meta: &PreviewMeta<'_>, base: &Path) -> String {
+    match meta.asset_src {
+        Some(resolver) => resolver(path),
+        None => relative(path, base),
+    }
 }
 
 fn relative(path: &str, base: &Path) -> String {
@@ -309,7 +325,45 @@ fn escape(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cadmus_core::BlockKind;
+    use cadmus_core::{BitmapRef, BlockKind, Payload};
+
+    fn base_meta<'a>(title: &'a str) -> PreviewMeta<'a> {
+        PreviewMeta {
+            title,
+            byline: None,
+            cover: None,
+            asset_src: None,
+        }
+    }
+
+    #[test]
+    fn empty_resolved_source_omits_figure() {
+        let document = Document {
+            doc_hash: 1,
+            title: None,
+            blocks: vec![Block {
+                id: 2,
+                kind: BlockKind::Figure,
+                order: 0,
+                page_range: None,
+                payload: Payload::Bitmap(BitmapRef {
+                    path: "assets/big.png".into(),
+                    width_px: 0,
+                    height_px: 0,
+                }),
+            }],
+        };
+        let resolver = |_path: &str| String::new();
+        let meta = PreviewMeta {
+            asset_src: Some(&resolver),
+            ..base_meta("t")
+        };
+        let html = render_to_string(&document, Path::new(""), &meta).unwrap();
+        assert!(
+            !html.contains("<figure") && !html.contains("assets/big.png"),
+            "解析为空的位图应整体省略，不出现裂图"
+        );
+    }
 
     #[test]
     fn renders_title_and_escapes_text() {
@@ -329,7 +383,7 @@ mod tests {
             &PreviewMeta {
                 title: "书",
                 byline: Some("作者"),
-                cover: None,
+                ..base_meta("书")
             },
         )
         .unwrap();
@@ -339,5 +393,38 @@ mod tests {
         assert!(html.contains("s-fs"), "缺字号滑条");
         assert!(html.contains("c-theme"), "缺主题选项");
         assert!(html.contains("楷体"), "缺字体选项");
+    }
+
+    #[test]
+    fn asset_resolver_rewrites_bitmap_sources() {
+        let document = Document {
+            doc_hash: 1,
+            title: None,
+            blocks: vec![Block {
+                id: 2,
+                kind: BlockKind::Figure,
+                order: 0,
+                page_range: None,
+                payload: Payload::Bitmap(BitmapRef {
+                    path: "assets/p1.png".into(),
+                    width_px: 10,
+                    height_px: 10,
+                }),
+            }],
+        };
+        let resolver = |path: &str| format!("data:demo/{path}");
+        let meta = PreviewMeta {
+            asset_src: Some(&resolver),
+            ..base_meta("t")
+        };
+        let html = render_to_string(&document, Path::new(""), &meta).unwrap();
+        assert!(
+            html.contains("data:demo/assets/p1.png"),
+            "位图 src 应经过 asset_src 解析器"
+        );
+        assert!(
+            !html.contains("src=\"assets/p1.png\""),
+            "不应回退到相对路径"
+        );
     }
 }

@@ -168,6 +168,7 @@ fn run_reflow(args: &ReflowArgs) -> Result<ExitCode> {
                 title: &title,
                 byline: None,
                 cover: None,
+                asset_src: None,
             };
             let path = render(&document, &options.out_dir, &meta)?;
             eprintln!("HTML 预览：{}", path.display());
@@ -294,6 +295,7 @@ fn run_epub(args: &EpubArgs) -> Result<ExitCode> {
                 title: &title,
                 byline: authors.as_deref(),
                 cover: report.cover_path.as_deref(),
+                asset_src: None,
             };
             let path = render(&document, &out_dir, &meta)?;
             eprintln!("HTML 预览：{}", path.display());

@@ -37,20 +37,67 @@ fn walk(node: roxmltree::Node<'_, '_>, out: &mut Vec<ContentBlock>) {
                 push_text(out, BlockKind::Heading { level }, collect_text(child));
             }
             "p" | "blockquote" | "li" | "figcaption" => {
-                push_text(out, BlockKind::Paragraph, collect_text(child));
+                flush_container(out, BlockKind::Paragraph, child);
             }
             "pre" => push_text(out, BlockKind::Code, collect_text(child)),
             "table" => push_text(out, BlockKind::Table, collect_table(child)),
-            "img" => {
-                if let Some(src) = child.attribute("src") {
-                    out.push(ContentBlock::Image {
-                        src: src.to_string(),
-                    });
-                }
-            }
+            "img" | "svg" => push_image(out, child),
             _ => walk(child, out),
         }
     }
+}
+
+/// 段落类容器：文本与内嵌图片按出现顺序输出（`<p>文字<img/></p>` 不丢图）。
+fn flush_container(out: &mut Vec<ContentBlock>, kind: BlockKind, node: roxmltree::Node<'_, '_>) {
+    let mut pending = String::new();
+    collect_mixed(node, out, &mut pending);
+    push_text(out, kind, pending);
+}
+
+/// 收集文本与图片的混排：文本累积在 `pending`，遇到图片先冲出文本块再输出图片。
+fn collect_mixed(node: roxmltree::Node<'_, '_>, out: &mut Vec<ContentBlock>, pending: &mut String) {
+    for child in node.children() {
+        if child.is_text() {
+            if let Some(text) = child.text() {
+                pending.push_str(text);
+            }
+        } else if child.is_element() {
+            let tag = child.tag_name().name().to_ascii_lowercase();
+            match tag.as_str() {
+                "img" | "svg" => {
+                    push_text(out, BlockKind::Paragraph, std::mem::take(pending));
+                    push_image(out, child);
+                }
+                "br" => pending.push('\n'),
+                _ => collect_mixed(child, out, pending),
+            }
+        }
+    }
+}
+
+/// 输出图片块：`<img src>` 或 SVG `<image href>`。
+fn push_image(out: &mut Vec<ContentBlock>, node: roxmltree::Node<'_, '_>) {
+    let src = if node.tag_name().name().eq_ignore_ascii_case("svg") {
+        svg_image_href(node)
+    } else {
+        node.attribute("src").map(str::to_string)
+    };
+    if let Some(src) = src {
+        out.push(ContentBlock::Image { src });
+    }
+}
+
+/// `<svg>` 内 `<image>` 引用的位图（href 或 xlink:href）。
+fn svg_image_href(node: roxmltree::Node<'_, '_>) -> Option<String> {
+    node.descendants()
+        .filter(|descendant| descendant.is_element())
+        .filter(|descendant| descendant.tag_name().name().eq_ignore_ascii_case("image"))
+        .find_map(|image| {
+            image
+                .attribute("href")
+                .or_else(|| image.attribute(("http://www.w3.org/1999/xlink", "href")))
+                .map(str::to_string)
+        })
 }
 
 fn push_text(out: &mut Vec<ContentBlock>, kind: BlockKind, text: String) {
@@ -92,6 +139,51 @@ fn collect_table(node: roxmltree::Node<'_, '_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keeps_images_inside_paragraphs() {
+        let xml = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:xlink="http://www.w3.org/1999/xlink"><body>
+            <p>前图：<img src="a.png"/>后文。</p>
+            <li>条目 <img src="b.png"/></li>
+            <p><svg viewBox="0 0 10 10"><image xlink:href="c.jpg" width="10" height="10"/></svg></p>
+        </body></html>"#;
+        let blocks = parse(xml).unwrap();
+        assert_eq!(
+            blocks[0],
+            ContentBlock::Text {
+                kind: BlockKind::Paragraph,
+                text: "前图：".into()
+            },
+            "图片前的文本应保留"
+        );
+        assert_eq!(
+            blocks[1],
+            ContentBlock::Image {
+                src: "a.png".into()
+            },
+            "段落内图片不能丢，且顺序不变"
+        );
+        assert_eq!(
+            blocks[2],
+            ContentBlock::Text {
+                kind: BlockKind::Paragraph,
+                text: "后文。".into()
+            },
+            "图片后的文本应保留"
+        );
+        assert!(
+            blocks.contains(&ContentBlock::Image {
+                src: "b.png".into()
+            }),
+            "列表项内图片不能丢"
+        );
+        assert!(
+            blocks.contains(&ContentBlock::Image {
+                src: "c.jpg".into()
+            }),
+            "SVG <image> 图片不能丢"
+        );
+    }
 
     #[test]
     fn converts_xhtml() {

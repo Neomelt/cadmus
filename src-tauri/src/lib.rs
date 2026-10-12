@@ -4,7 +4,6 @@
 
 use std::path::PathBuf;
 
-use base64::Engine as _;
 use serde::Serialize;
 use tauri::Manager;
 
@@ -25,21 +24,11 @@ struct BookView {
 }
 
 fn to_view(entry: &library::BookEntry) -> BookView {
-    let cover_data = entry.cover.as_ref().and_then(|path| {
-        let bytes = std::fs::read(path).ok()?;
-        if bytes.len() > 400_000 {
-            return None;
-        }
-        let mime = if path.to_ascii_lowercase().ends_with(".png") {
-            "image/png"
-        } else {
-            "image/jpeg"
-        };
-        Some(format!(
-            "data:{mime};base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        ))
-    });
+    // 列表封面给较小上限（400 KB），避免书库一次性铺满内存。
+    let cover_data = entry
+        .cover
+        .as_ref()
+        .and_then(|path| library::data_url(path, 400_000));
     BookView {
         id: entry.id.clone(),
         title: entry.title.clone(),

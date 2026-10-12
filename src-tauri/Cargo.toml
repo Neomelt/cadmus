@@ -1,6 +1,6 @@
 [package]
 name = "cadmus"
-version = "0.1.3"
+version = "0.1.4"
 description = "cadmus 阅读器（Tauri 2 壳）"
 authors = ["Neomelt"]
 edition = "2024"
@@ -32,6 +32,10 @@ cadmus-preview = { path = "../crates/cadmus-preview" }
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2-foundation = { version = "0.3", features = ["NSURL", "NSString"] }
 url = "2"
+
+[dev-dependencies]
+# 测试中现场构造含图 EPUB。
+zip = "2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
