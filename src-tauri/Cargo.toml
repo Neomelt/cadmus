@@ -1,6 +1,6 @@
 [package]
 name = "cadmus"
-version = "0.1.4"
+version = "0.1.5"
 description = "cadmus 阅读器（Tauri 2 壳）"
 authors = ["Neomelt"]
 edition = "2024"

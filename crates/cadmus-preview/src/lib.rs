@@ -57,6 +57,7 @@ main {
 main h1 { font-size: 1.5em; } main h2 { font-size: 1.25em; }
 p { margin: .9em 0; }
 .byline { color: var(--muted); margin-top: -.6em; }
+.footnote { font-size: .92em; color: var(--muted); margin: 1.2rem 0; padding-top: .8rem; border-top: 1px solid var(--soft); }
 img { max-width: 100%; height: auto; }
 figure { margin: 1.4rem 0; text-align: center; }
 figure img.formula { max-height: 8em; margin: 0 auto; }
@@ -274,6 +275,9 @@ fn render_block(html: &mut String, block: &Block, base: &Path, meta: &PreviewMet
         (BlockKind::Code, Payload::Text(text)) => {
             let _ = writeln!(html, "<pre>{}</pre>", escape(text));
         }
+        (BlockKind::Footnote, Payload::Text(text)) => {
+            let _ = writeln!(html, "<aside class=\"footnote\">{}</aside>", escape(text));
+        }
         (_, Payload::Text(text)) => {
             let _ = writeln!(html, "<p>{}</p>", escape(text));
         }
@@ -362,6 +366,20 @@ mod tests {
         assert!(
             !html.contains("<figure") && !html.contains("assets/big.png"),
             "解析为空的位图应整体省略，不出现裂图"
+        );
+    }
+
+    #[test]
+    fn renders_footnote_blocks_as_asides() {
+        let document = Document {
+            doc_hash: 1,
+            title: None,
+            blocks: vec![Block::text(3, BlockKind::Footnote, 0, "脚注正文：解释。")],
+        };
+        let html = render_to_string(&document, Path::new(""), &base_meta("t")).unwrap();
+        assert!(
+            html.contains("<aside class=\"footnote\">脚注正文：解释。</aside>"),
+            "脚注块应渲染为 aside.footnote"
         );
     }
 

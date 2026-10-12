@@ -278,8 +278,16 @@ mod tests {
         dir
     }
 
-    /// 最小含图 EPUB：正文段落内嵌图（覆盖 `<p>文字<img/></p>` 混排路径）+ 一个缺失图引用。
-    fn build_epub_with_image(image: &[u8]) -> Vec<u8> {
+    /// 章节 XHTML：段落内嵌图（覆盖 `<p>文字<img/></p>` 混排路径）+ 一个缺失图引用。
+    const IMAGE_CHAPTER: &str = r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><body>
+  <h1>第一章 有图</h1>
+  <p>前面是图：<img src="pic.png" alt="插"/>后面是字。</p>
+  <img src="missing.png" alt="缺失"/>
+</body></html>"#;
+
+    /// 最小 EPUB 骨架：给定章节 XHTML 与附加文件（zip 内路径 → 内容）。
+    fn build_epub(chapter: &str, files: &[(&str, &[u8])]) -> Vec<u8> {
         use std::io::Write as _;
         let container = r#"<?xml version="1.0"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -288,7 +296,7 @@ mod tests {
         let opf = r#"<?xml version="1.0"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:title>图册</dc:title>
+    <dc:title>测试书</dc:title>
   </metadata>
   <manifest>
     <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
@@ -296,12 +304,6 @@ mod tests {
   </manifest>
   <spine><itemref idref="ch1"/></spine>
 </package>"#;
-        let chapter = r#"<?xml version="1.0"?>
-<html xmlns="http://www.w3.org/1999/xhtml"><body>
-  <h1>第一章 有图</h1>
-  <p>前面是图：<img src="pic.png" alt="插"/>后面是字。</p>
-  <img src="missing.png" alt="缺失"/>
-</body></html>"#;
         let mut buffer = std::io::Cursor::new(Vec::new());
         {
             let mut writer = zip::ZipWriter::new(&mut buffer);
@@ -316,8 +318,10 @@ mod tests {
             writer.write_all(opf.as_bytes()).unwrap();
             writer.start_file("OEBPS/ch1.xhtml", options).unwrap();
             writer.write_all(chapter.as_bytes()).unwrap();
-            writer.start_file("OEBPS/pic.png", options).unwrap();
-            writer.write_all(image).unwrap();
+            for (path, data) in files {
+                writer.start_file(*path, options).unwrap();
+                writer.write_all(data).unwrap();
+            }
             writer.finish().unwrap();
         }
         buffer.into_inner()
@@ -333,7 +337,7 @@ mod tests {
     #[test]
     fn imported_images_render_inline() {
         let dir = temp_dir("img");
-        let bytes = build_epub_with_image(&tiny_png());
+        let bytes = build_epub(IMAGE_CHAPTER, &[("OEBPS/pic.png", &tiny_png())]);
         let entry = ingest(&dir, &bytes, "epub", "图册", false, Some("img1".into())).unwrap();
         let html = read_entry(&dir, &entry.id).unwrap();
         assert!(
@@ -357,11 +361,33 @@ mod tests {
         let dir = temp_dir("bigimg");
         // 2.6 MB 大图：超过内联上限（2.5 MB）时整块省略。
         let big: Vec<u8> = (0..2_600_000u32).map(|i| (i % 251) as u8).collect();
-        let bytes = build_epub_with_image(&big);
+        let bytes = build_epub(IMAGE_CHAPTER, &[("OEBPS/pic.png", &big)]);
         let entry = ingest(&dir, &bytes, "epub", "大图册", false, Some("big1".into())).unwrap();
         let html = read_entry(&dir, &entry.id).unwrap();
         assert!(!html.contains("<figure"), "超限图片应省略而非裂图");
         assert!(html.contains("后面是字"), "正文不受大图影响");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn footnotes_render_as_asides() {
+        let dir = temp_dir("note");
+        let chapter = r##"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
+  <h1>第一章 有注</h1>
+  <p>这是一句话<a epub:type="noteref" href="#fn1">1</a>末尾。</p>
+  <aside epub:type="footnote" id="fn1">脚注正文：解释这句话。<a href="#ref1" epub:type="backlink">↩</a></aside>
+</body></html>"##;
+        let bytes = build_epub(chapter, &[]);
+        let entry = ingest(&dir, &bytes, "epub", "注册", false, Some("note1".into())).unwrap();
+        let html = read_entry(&dir, &entry.id).unwrap();
+        assert!(html.contains("[1]"), "noteref 标记应可见");
+        assert!(
+            html.contains("class=\"footnote\""),
+            "脚注正文应渲染为 footnote 块"
+        );
+        assert!(html.contains("脚注正文：解释这句话。"), "脚注内容应完整");
+        assert!(!html.contains("↩"), "回链箭头应被剔除");
         let _ = fs::remove_dir_all(&dir);
     }
 

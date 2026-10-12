@@ -15,6 +15,9 @@ pub enum ContentBlock {
     },
 }
 
+/// EPUB 结构语义命名空间（`epub:type`）。
+const EPUB_OPS_NS: &str = "http://www.idpf.org/2007/ops";
+
 /// 解析一章 XHTML。
 pub fn parse(xml: &str) -> Result<Vec<ContentBlock>> {
     let document = roxmltree::Document::parse(xml)
@@ -30,6 +33,10 @@ pub fn parse(xml: &str) -> Result<Vec<ContentBlock>> {
 
 fn walk(node: roxmltree::Node<'_, '_>, out: &mut Vec<ContentBlock>) {
     for child in node.children().filter(|child| child.is_element()) {
+        if has_epub_type(child, "footnote") {
+            push_footnote(out, child);
+            continue;
+        }
         let tag = child.tag_name().name().to_ascii_lowercase();
         match tag.as_str() {
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
@@ -62,6 +69,10 @@ fn collect_mixed(node: roxmltree::Node<'_, '_>, out: &mut Vec<ContentBlock>, pen
                 pending.push_str(text);
             }
         } else if child.is_element() {
+            if has_epub_type(child, "noteref") {
+                pending.push_str(&noteref_marker(&collect_text(child)));
+                continue;
+            }
             let tag = child.tag_name().name().to_ascii_lowercase();
             match tag.as_str() {
                 "img" | "svg" => {
@@ -73,6 +84,38 @@ fn collect_mixed(node: roxmltree::Node<'_, '_>, out: &mut Vec<ContentBlock>, pen
             }
         }
     }
+}
+
+/// 元素是否带指定 `epub:type`（命名空间见 [`EPUB_OPS_NS`]，兼容无前缀写法）。
+fn has_epub_type(node: roxmltree::Node<'_, '_>, value: &str) -> bool {
+    let Some(types) = node
+        .attribute((EPUB_OPS_NS, "type"))
+        .or_else(|| node.attribute("type"))
+    else {
+        return false;
+    };
+    types.split_whitespace().any(|item| item == value)
+}
+
+/// noteref 标记规范成 `[1]` 形式（去掉原文可能自带的括号）。
+fn noteref_marker(raw: &str) -> String {
+    let trimmed = raw
+        .trim()
+        .trim_matches(['[', ']', '(', ')', '（', '）', '【', '】'])
+        .trim();
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        format!("[{trimmed}]")
+    }
+}
+
+/// 输出脚注块：文本去掉回链（`epub:type="backlink"` / `role="doc-backlink"`）。
+fn push_footnote(out: &mut Vec<ContentBlock>, node: roxmltree::Node<'_, '_>) {
+    let mut text = String::new();
+    collect_text_ext(node, &mut text, true);
+    let text = text.trim().trim_end_matches(['↩', '↵']).trim();
+    push_text(out, BlockKind::Footnote, text.to_string());
 }
 
 /// 输出图片块：`<img src>` 或 SVG `<image href>`。
@@ -110,11 +153,47 @@ fn push_text(out: &mut Vec<ContentBlock>, kind: BlockKind, text: String) {
     });
 }
 
+/// 深度收集文本：`noteref` 规范为 `[n]`；`skip_backlinks` 时丢弃回链子树；
+/// 块级子元素（p/div/li）之间补换行，避免多段落脚注粘连。
+fn collect_text_ext(node: roxmltree::Node<'_, '_>, out: &mut String, skip_backlinks: bool) {
+    for child in node.children() {
+        if child.is_text() {
+            if let Some(text) = child.text() {
+                out.push_str(text);
+            }
+            continue;
+        }
+        if !child.is_element() {
+            continue;
+        }
+        if skip_backlinks && is_backlink(child) {
+            continue;
+        }
+        if has_epub_type(child, "noteref") {
+            out.push_str(&noteref_marker(&collect_text(child)));
+            continue;
+        }
+        let tag = child.tag_name().name().to_ascii_lowercase();
+        if tag == "br" {
+            out.push('\n');
+            continue;
+        }
+        collect_text_ext(child, out, skip_backlinks);
+        if matches!(tag.as_str(), "p" | "div" | "li") && !out.is_empty() && !out.ends_with('\n') {
+            out.push('\n');
+        }
+    }
+}
+
+/// 回链元素：`epub:type="backlink"` 或 `role="doc-backlink"`。
+fn is_backlink(node: roxmltree::Node<'_, '_>) -> bool {
+    has_epub_type(node, "backlink") || node.attribute("role") == Some("doc-backlink")
+}
+
 fn collect_text(node: roxmltree::Node<'_, '_>) -> String {
-    node.descendants()
-        .filter(|descendant| descendant.is_text())
-        .filter_map(|descendant| descendant.text())
-        .collect::<String>()
+    let mut out = String::new();
+    collect_text_ext(node, &mut out, false);
+    out
 }
 
 fn collect_table(node: roxmltree::Node<'_, '_>) -> String {
@@ -182,6 +261,48 @@ mod tests {
                 src: "c.jpg".into()
             }),
             "SVG <image> 图片不能丢"
+        );
+    }
+
+    #[test]
+    fn parses_footnotes() {
+        let xml = r##"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body>
+            <p>这是一句话<a epub:type="noteref" href="#fn1">1</a>末尾。</p>
+            <p>第二段。</p>
+            <aside epub:type="footnote" id="fn1"><p>脚注正文：解释这句话。<a href="#ref1" epub:type="backlink">↩</a></p><p>补充一句。</p></aside>
+            <h2>标题<a epub:type="noteref" href="#fn2">2</a></h2>
+        </body></html>"##;
+        let blocks = parse(xml).unwrap();
+        assert_eq!(
+            blocks[0],
+            ContentBlock::Text {
+                kind: BlockKind::Paragraph,
+                text: "这是一句话[1]末尾。".into()
+            },
+            "noteref 应保留为可见标记 [1]"
+        );
+        assert_eq!(
+            blocks[1],
+            ContentBlock::Text {
+                kind: BlockKind::Paragraph,
+                text: "第二段。".into()
+            }
+        );
+        assert_eq!(
+            blocks[2],
+            ContentBlock::Text {
+                kind: BlockKind::Footnote,
+                text: "脚注正文：解释这句话。\n补充一句。".into()
+            },
+            "脚注应成为 Footnote 块：去掉回链、多段落换行"
+        );
+        assert_eq!(
+            blocks[3],
+            ContentBlock::Text {
+                kind: BlockKind::Heading { level: 2 },
+                text: "标题[2]".into()
+            },
+            "标题里的 noteref 也应规范为标记"
         );
     }
 
