@@ -8,6 +8,8 @@
 //! └─ assets/<id>/cover.*   # 封面与正文图片（由解析器导出）
 //! ```
 
+use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -394,6 +396,143 @@ pub fn set_progress(dir: &Path, id: &str, progress: f32) -> Result<(), String> {
     save(dir, &entries)
 }
 
+/// 导出某本书的标注为 Markdown（写入 `export_dir`，模板见 ARCHITECTURE §8）。
+///
+/// 全量重写：输出确定（同输入同结果），天然幂等。
+pub fn export_markdown(dir: &Path, id: &str, export_dir: &Path) -> Result<String, String> {
+    let entries = load(dir);
+    let entry = entries
+        .iter()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| format!("未找到书籍：{id}"))?;
+    let store = annotations::load(dir, id);
+    if store.annotations.is_empty() && store.bookmarks.is_empty() {
+        return Err("这本书还没有标注".into());
+    }
+
+    // 文档顺序索引：block_id →（序号, 最近标题, 原页）。
+    let order = block_context(dir, entry);
+
+    let mut markdown = format!("# 《{}》标注\n\n", entry.title);
+    if !store.annotations.is_empty() {
+        let mut sorted = store.annotations.clone();
+        sorted.sort_by_key(|annotation| {
+            order
+                .get(&annotation.block_id)
+                .map(|context| context.0)
+                .unwrap_or(usize::MAX)
+        });
+        let total = order.len().max(1);
+        for annotation in sorted {
+            let _ = writeln!(markdown, "> {}", annotation.text.replace('\n', " "));
+            if let Some((index, heading, page)) = order.get(&annotation.block_id) {
+                let mut parts: Vec<String> = Vec::new();
+                if !heading.is_empty() {
+                    parts.push(heading.clone());
+                }
+                parts.push(format!("{}%", (index + 1) * 100 / total));
+                if let Some(page) = page {
+                    parts.push(format!("原书 p.{page}"));
+                }
+                let _ = writeln!(markdown, "- 位置：{}", parts.join(" · "));
+            }
+            if let Some(note) = &annotation.note {
+                let _ = writeln!(markdown, "- 笔记：{}", note.replace('\n', " "));
+            }
+            markdown.push('\n');
+        }
+    }
+    if !store.bookmarks.is_empty() {
+        markdown.push_str("## 书签\n\n");
+        let mut bookmarks = store.bookmarks.clone();
+        bookmarks.sort_by(|a, b| a.progress.total_cmp(&b.progress));
+        for bookmark in bookmarks {
+            let _ = writeln!(
+                markdown,
+                "- {} · {}%",
+                bookmark.label,
+                (bookmark.progress * 100.0).round() as u32
+            );
+        }
+        markdown.push('\n');
+    }
+
+    fs::create_dir_all(export_dir).map_err(|error| error.to_string())?;
+    let file_name = format!("{}-高亮.md", sanitize_file_name(&entry.title));
+    let path = export_dir.join(file_name);
+    fs::write(&path, markdown).map_err(|error| error.to_string())?;
+    Ok(path.display().to_string())
+}
+
+/// 文件名安全化：去掉路径分隔与常见非法字符。
+fn sanitize_file_name(name: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|ch| {
+            if matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                ' '
+            } else {
+                ch
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        "未命名".to_string()
+    } else {
+        trimmed.chars().take(80).collect()
+    }
+}
+
+/// 块上下文：block_id →（序号, 最近标题, 原页）。解析失败时返回空表（导出退化为原序）。
+fn block_context(dir: &Path, entry: &BookEntry) -> HashMap<String, (usize, String, Option<u32>)> {
+    let document = match entry.format.as_str() {
+        "pdf" => {
+            // 优先用重排缓存（免重排）。
+            let cached = assets_dir(dir, &entry.id).join(REFLOW_DOC_CACHE);
+            let Ok(raw) = fs::read_to_string(&cached) else {
+                return HashMap::new();
+            };
+            let Ok(document) = serde_json::from_str::<cadmus_core::Document>(&raw) else {
+                return HashMap::new();
+            };
+            document
+        }
+        _ => {
+            let Ok(bytes) = fs::read(resolve_stored(dir, &entry.file)) else {
+                return HashMap::new();
+            };
+            if entry.format == "txt" {
+                let Ok((document, _)) =
+                    cadmus_epub::parse_txt_bytes(&bytes, &cadmus_epub::TxtOptions::default())
+                else {
+                    return HashMap::new();
+                };
+                document
+            } else {
+                let Ok((document, _)) =
+                    cadmus_epub::parse_epub_bytes(&bytes, &cadmus_epub::EpubOptions::default())
+                else {
+                    return HashMap::new();
+                };
+                document
+            }
+        }
+    };
+    let mut map = HashMap::new();
+    let mut heading = String::new();
+    for (index, block) in document.blocks.iter().enumerate() {
+        if let cadmus_core::BlockKind::Heading { .. } = block.kind
+            && let Some(text) = block.as_text()
+        {
+            heading = text.chars().take(40).collect();
+        }
+        let page = block.page_range.map(|(start, _)| start);
+        map.insert(block.id.to_string(), (index, heading.clone(), page));
+    }
+    map
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -602,6 +741,43 @@ mod tests {
             "删除应生效"
         );
         let _ = fs::remove_dir_all(&moved);
+    }
+
+    #[test]
+    fn exports_markdown_in_document_order() {
+        let dir = temp_dir("export");
+        let sample = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sample/sample.epub");
+        let bytes = fs::read(&sample).unwrap();
+        ingest(&dir, &bytes, "epub", "外来书", false, Some("exp1".into())).unwrap();
+        let (document, _) =
+            cadmus_epub::parse_epub_bytes(&bytes, &cadmus_epub::EpubOptions::default()).unwrap();
+        let first = document
+            .blocks
+            .iter()
+            .find(|block| block.as_text().is_some())
+            .unwrap();
+        let last = document
+            .blocks
+            .iter()
+            .rev()
+            .find(|block| block.as_text().is_some())
+            .unwrap();
+        // 后加的（文档靠后）先入库：导出仍应按文档顺序。
+        annotations::add(&dir, "exp1", &last.id.to_string(), 0, 2, "结尾", "green").unwrap();
+        annotations::add(&dir, "exp1", &first.id.to_string(), 0, 2, "开头", "yellow").unwrap();
+        annotations::add_bookmark(&dir, "exp1", Some(&first.id.to_string()), "起点", 0.0).unwrap();
+
+        let out = temp_dir("export-out");
+        let path = export_markdown(&dir, "exp1", &out).unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.starts_with("# 《"), "含书名标题：{content}");
+        let pos_first = content.find("> 开头").unwrap();
+        let pos_last = content.find("> 结尾").unwrap();
+        assert!(pos_first < pos_last, "按文档顺序导出：\n{content}");
+        assert!(content.contains("- 位置："), "含位置行");
+        assert!(content.contains("## 书签"), "含书签段");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&out);
     }
 
     #[test]

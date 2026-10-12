@@ -36,6 +36,16 @@ jobs:
           cp -f src-tauri/icons/ios/*.png src-tauri/gen/apple/Assets.xcassets/AppIcon.appiconset/
           sed -i '' 's/TARGETED_DEVICE_FAMILY = "1,2"/TARGETED_DEVICE_FAMILY = "2"/g' src-tauri/gen/apple/cadmus.xcodeproj/project.pbxproj
           echo "ipad-only targets: $(grep -c 'TARGETED_DEVICE_FAMILY = "2"' src-tauri/gen/apple/cadmus.xcodeproj/project.pbxproj)"
+      - name: enable files app visibility
+        run: |
+          PLIST=$(find src-tauri/gen/apple -maxdepth 3 -name Info.plist -path '*_iOS*' | head -1)
+          test -n "$PLIST"
+          echo "plist=$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UIFileSharingEnabled bool true" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :UIFileSharingEnabled true" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :LSSupportsOpeningDocumentsInPlace bool true" "$PLIST" 2>/dev/null \
+            || /usr/libexec/PlistBuddy -c "Set :LSSupportsOpeningDocumentsInPlace true" "$PLIST"
+          plutil -p "$PLIST" | grep -iE 'UIFileSharing|LSSupports'
       - name: upload generated xcode project
         uses: actions/upload-artifact@v4
         with:

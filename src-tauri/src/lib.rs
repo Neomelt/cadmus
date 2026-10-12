@@ -184,6 +184,35 @@ fn delete_annotation(app: tauri::AppHandle, id: String, ann_id: String) -> Resul
     annotations::delete(&dir, &id, &ann_id)
 }
 
+#[tauri::command]
+fn add_bookmark(
+    app: tauri::AppHandle,
+    id: String,
+    block_id: Option<String>,
+    label: String,
+    progress: f32,
+) -> Result<annotations::Bookmark, String> {
+    let dir = data_dir(&app)?;
+    annotations::add_bookmark(&dir, &id, block_id.as_deref(), &label, progress)
+}
+
+#[tauri::command]
+fn delete_bookmark(app: tauri::AppHandle, id: String, bookmark_id: String) -> Result<(), String> {
+    let dir = data_dir(&app)?;
+    annotations::delete_bookmark(&dir, &id, &bookmark_id)
+}
+
+#[tauri::command]
+fn export_markdown(app: tauri::AppHandle, id: String) -> Result<String, String> {
+    let dir = data_dir(&app)?;
+    let export_dir = app
+        .path()
+        .document_dir()
+        .map_err(|error| format!("无法定位导出目录：{error}"))?
+        .join("cadmus-exports");
+    library::export_markdown(&dir, &id, &export_dir)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -198,7 +227,10 @@ pub fn run() {
             list_annotations,
             add_annotation,
             update_annotation,
-            delete_annotation
+            delete_annotation,
+            add_bookmark,
+            delete_bookmark,
+            export_markdown
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

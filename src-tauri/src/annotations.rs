@@ -29,6 +29,21 @@ pub struct Annotation {
 pub struct AnnotationStore {
     #[serde(default)]
     pub annotations: Vec<Annotation>,
+    #[serde(default)]
+    pub bookmarks: Vec<Bookmark>,
+}
+
+/// 一条书签。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Bookmark {
+    pub id: String,
+    /// 附近块 id（十进制字符串；旧数据可能为 None）。
+    pub block_id: Option<String>,
+    /// 摘录（列表展示用）。
+    pub label: String,
+    /// 阅读进度 0..1。
+    pub progress: f32,
+    pub created_at: u64,
 }
 
 const COLORS: [&str; 4] = ["yellow", "green", "blue", "pink"];
@@ -137,6 +152,45 @@ pub fn delete(dir: &Path, book_id: &str, ann_id: &str) -> Result<(), String> {
     save(dir, book_id, &store)
 }
 
+/// 新增书签（同一块重复添加时返回既有条目）。
+pub fn add_bookmark(
+    dir: &Path,
+    book_id: &str,
+    block_id: Option<&str>,
+    label: &str,
+    progress: f32,
+) -> Result<Bookmark, String> {
+    let id = format!(
+        "{:016x}",
+        cadmus_core::content_hash(format!("{book_id}:bm:{}", block_id.unwrap_or("")).as_bytes())
+    );
+    let mut store = load(dir, book_id);
+    if let Some(existing) = store.bookmarks.iter().find(|item| item.id == id) {
+        return Ok(existing.clone());
+    }
+    let bookmark = Bookmark {
+        id,
+        block_id: block_id.map(str::to_string),
+        label: label.chars().take(120).collect(),
+        progress: progress.clamp(0.0, 1.0),
+        created_at: crate::library::now(),
+    };
+    store.bookmarks.push(bookmark.clone());
+    save(dir, book_id, &store)?;
+    Ok(bookmark)
+}
+
+/// 删除书签。
+pub fn delete_bookmark(dir: &Path, book_id: &str, bookmark_id: &str) -> Result<(), String> {
+    let mut store = load(dir, book_id);
+    let before = store.bookmarks.len();
+    store.bookmarks.retain(|item| item.id != bookmark_id);
+    if store.bookmarks.len() == before {
+        return Err(format!("未找到书签：{bookmark_id}"));
+    }
+    save(dir, book_id, &store)
+}
+
 /// 渲染用标记（供阅读页注入预览）。
 pub fn marks(dir: &Path, book_id: &str) -> Vec<cadmus_preview::Mark> {
     load(dir, book_id)
@@ -208,6 +262,23 @@ mod tests {
         assert!(add(&dir, "b", "1", 9, 3, "x", "yellow").is_err());
         let annotation = add(&dir, "b", "1", 0, 3, "abc", "rainbow").unwrap();
         assert_eq!(annotation.color, "yellow", "未知颜色回退黄");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bookmarks_add_and_delete() {
+        let dir = temp_dir("bm");
+        let first = add_bookmark(&dir, "book1", Some("42"), "第一章 开头", 0.12).unwrap();
+        assert_eq!(first.block_id.as_deref(), Some("42"));
+        // 同块重复：幂等
+        let again = add_bookmark(&dir, "book1", Some("42"), "又点了一次", 0.5).unwrap();
+        assert_eq!(again.id, first.id);
+        assert_eq!(again.label, "第一章 开头");
+        // 持久化 + 删除
+        assert_eq!(load(&dir, "book1").bookmarks.len(), 1);
+        delete_bookmark(&dir, "book1", &first.id).unwrap();
+        assert!(load(&dir, "book1").bookmarks.is_empty());
+        assert!(delete_bookmark(&dir, "book1", "missing").is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 }

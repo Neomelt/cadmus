@@ -102,6 +102,13 @@
     color: #d9534f; background: transparent; border: 0; cursor: pointer; padding: .15rem .3rem;
   }
   .ann-empty { font-size: .85rem; opacity: .5; padding: 1rem 0; }
+  .ann-sub { margin-top: 1.3rem; }
+  .ann-export {
+    margin-top: 1.4rem; width: 100%; font: inherit; font-size: .9rem;
+    padding: .6rem; border-radius: 10px;
+    border: 1px solid rgba(127, 127, 127, .35);
+    background: transparent; color: CanvasText; cursor: pointer;
+  }
   .loading { padding: 3rem 1rem; text-align: center; opacity: .5; }
   #toast {
     position: fixed; z-index: 50; left: 50%; bottom: max(1.2rem, env(safe-area-inset-bottom));
@@ -143,6 +150,9 @@
   <h3>标注</h3>
   <div class="ann-filter" id="ann-filter"></div>
   <div id="ann-list"></div>
+  <h3 class="ann-sub">书签</h3>
+  <div id="bm-list"></div>
+  <button id="btn-export" class="ann-export">导出 Markdown</button>
 </aside>
 <div id="toast"></div>
 
@@ -340,6 +350,7 @@
     const annFilter = document.getElementById('ann-filter');
     const btnAnn = document.getElementById('btn-ann');
     let annotations = [];
+    let bookmarks = [];
     let annColorFilter = 'all';
     let annPanelOpen = false;
 
@@ -419,6 +430,58 @@
         row.appendChild(rm);
         annList.appendChild(row);
       });
+      const bmList = document.getElementById('bm-list');
+      bmList.innerHTML = '';
+      if (bookmarks.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'ann-empty';
+        empty.textContent = '还没有书签。阅读页顶栏点「书签」即可添加。';
+        bmList.appendChild(empty);
+      } else {
+        bookmarks.slice().sort(function (a, b) { return a.progress - b.progress; }).forEach(function (item) {
+          const row = document.createElement('div');
+          row.className = 'ann-item';
+          const body = document.createElement('div');
+          body.className = 'body';
+          const quote = document.createElement('p');
+          quote.className = 'quote';
+          quote.textContent = (item.label || '书签') + ' · ' + Math.round((item.progress || 0) * 100) + '%';
+          body.appendChild(quote);
+          body.addEventListener('click', function () {
+            try {
+              if (item.block_id) {
+                frame.contentWindow.postMessage({ type: 'cadmus:jump', blockId: item.block_id }, '*');
+              } else {
+                jumpByProgress(item.progress || 0);
+              }
+            } catch (error) {}
+            toggleAnnPanel(false);
+          });
+          row.appendChild(body);
+          const rm = document.createElement('button');
+          rm.className = 'rm';
+          rm.textContent = '删除';
+          rm.addEventListener('click', async function () {
+            try {
+              await invoke('delete_bookmark', { id: current, bookmarkId: item.id });
+              bookmarks = bookmarks.filter(function (x) { return x.id !== item.id; });
+              renderAnnList();
+            } catch (error) {
+              showToast('删除失败：' + error);
+            }
+          });
+          row.appendChild(rm);
+          bmList.appendChild(row);
+        });
+      }
+    }
+
+    function jumpByProgress(progress) {
+      try {
+        const win = frame.contentWindow;
+        const max = win.document.documentElement.scrollHeight - win.innerHeight;
+        if (max > 0) win.scrollTo(0, progress * max);
+      } catch (error) {}
     }
 
     async function refreshAnnotations() {
@@ -426,6 +489,7 @@
       try {
         const store = await invoke('list_annotations', { id: current });
         annotations = (store && store.annotations) || [];
+        bookmarks = (store && store.bookmarks) || [];
         renderAnnList();
       } catch (error) {}
     }
@@ -438,6 +502,15 @@
     btnAnn.addEventListener('click', function () {
       toggleAnnPanel();
       if (annPanelOpen) refreshAnnotations();
+    });
+
+    document.getElementById('btn-export').addEventListener('click', async function () {
+      try {
+        const path = await invoke('export_markdown', { id: current });
+        showToast('已导出：' + path);
+      } catch (error) {
+        showToast('导出失败：' + error);
+      }
     });
 
     window.addEventListener('message', async function (event) {
@@ -469,6 +542,20 @@
           refreshAnnotations();
         } catch (error) {
           showToast('保存失败：' + error);
+        }
+      } else if (data.type === 'cadmus:addBookmark') {
+        try {
+          const progress = readingProgress() || 0;
+          await invoke('add_bookmark', {
+            id: current,
+            blockId: data.blockId || null,
+            label: data.label || '',
+            progress: progress
+          });
+          showToast('已加书签');
+          refreshAnnotations();
+        } catch (error) {
+          showToast('加书签失败：' + error);
         }
       } else if (data.type === 'cadmus:annotationDeleted') {
         try {

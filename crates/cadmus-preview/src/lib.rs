@@ -398,8 +398,7 @@ const SCRIPT: &str = r#"<script>
 
   document.getElementById('ann-note-cancel').addEventListener('click', function () {
     annNote.classList.remove('open');
-  });
-  document.getElementById('ann-note-save').addEventListener('click', function () {
+  });  document.getElementById('ann-note-save').addEventListener('click', function () {
     if (activeNoteAnnId) {
       var value = annNoteText.value;
       parentPost({ type: 'cadmus:annotationUpdated', id: activeNoteAnnId, note: value });
@@ -417,6 +416,24 @@ const SCRIPT: &str = r#"<script>
     activeNoteAnnId = null;
     annNote.classList.remove('open');
     annBar.classList.remove('open');
+  });
+
+  function currentAnchor() {
+    var blocks = document.querySelectorAll('[data-block]');
+    var best = null;
+    for (var i = 0; i < blocks.length; i++) {
+      if (blocks[i].getBoundingClientRect().bottom > 90) { best = blocks[i]; break; }
+    }
+    if (!best && blocks.length) best = blocks[blocks.length - 1];
+    return best;
+  }
+  document.getElementById('bm-btn').addEventListener('click', function () {
+    var anchor = currentAnchor();
+    parentPost({
+      type: 'cadmus:addBookmark',
+      blockId: anchor ? anchor.dataset.block : null,
+      label: anchor ? anchor.textContent.trim().slice(0, 30) : ''
+    });
   });
 
   window.addEventListener('message', function (event) {
@@ -471,6 +488,7 @@ pub fn render_to_string(
     html.push_str("<div class=\"toolbar\">\n");
     html.push_str("<button id=\"toc-btn\">目录</button>\n");
     let _ = writeln!(html, "<span class=\"title\">{}</span>", escape(meta.title));
+    html.push_str("<button id=\"bm-btn\">书签</button>\n");
     html.push_str("<button id=\"set-btn\">Aa 设置</button>\n");
     html.push_str("</div>\n");
 
