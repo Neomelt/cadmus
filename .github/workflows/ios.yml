@@ -6,6 +6,7 @@ on:
     branches: [master]
     paths:
       - "src-tauri/**"
+      - "crates/**"
       - "ui/**"
       - "package.json"
       - ".github/workflows/ios.yml"
