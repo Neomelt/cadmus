@@ -178,10 +178,13 @@ pub fn read_entry(dir: &Path, id: &str) -> Result<String, String> {
     }
 }
 
-/// PDF 阅读：重排一次，把渲染结果缓存为 `assets/<id>/index.html`。
+/// PDF 重排缓存文件名：重排算法升级时递增，旧缓存自动失效。
+const REFLOW_CACHE_FILE: &str = "reflow-v1.html";
+
+/// PDF 阅读：重排一次，把渲染结果缓存到 `assets/<id>/`。
 fn read_pdf(dir: &Path, entry: &BookEntry) -> Result<String, String> {
     let assets = assets_dir(dir, &entry.id);
-    let cached = assets.join("index.html");
+    let cached = assets.join(REFLOW_CACHE_FILE);
     if let Ok(html) = fs::read_to_string(&cached) {
         return Ok(html);
     }
@@ -438,8 +441,8 @@ mod tests {
             "重排应提取到正文文本"
         );
         assert!(
-            assets_dir(&dir, &entry.id).join("index.html").exists(),
-            "重排结果应缓存为 assets/<id>/index.html"
+            assets_dir(&dir, &entry.id).join(REFLOW_CACHE_FILE).exists(),
+            "重排结果应缓存到 assets/<id>/"
         );
 
         // 缓存命中：二次读取直接返回缓存内容。

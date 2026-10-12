@@ -149,9 +149,35 @@ fn is_formula_line(line: &TextLine) -> bool {
     math as f32 / line.glyphs.len() as f32 > 0.5
 }
 
+/// 追加一行：处理不可映射字符与断行连字符（PDF 断字）。
 fn append_line(text: &mut String, line: &TextLine) {
-    let addition = line.text();
+    let raw = line.text();
+    if raw.is_empty() {
+        return;
+    }
+    // 行内不可映射字符（非字符/控制符）丢弃；出现在行尾的按断行连字符处理——
+    // PDF 的连字符字形常缺 Unicode 映射，提取为裸码点（控制符）或替换符。
+    let cleaned: String = raw.chars().filter(|ch| !is_noise_char(*ch)).collect();
+    let trailing_noise = raw.trim_end().chars().last().is_some_and(is_noise_char);
+    let mut addition = cleaned.trim().to_string();
     if addition.is_empty() {
+        return;
+    }
+    if trailing_noise {
+        addition.push('-');
+    }
+    let lowercase_next = addition
+        .chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_lowercase());
+    // 上一行以连字符结尾（其后可能还有空白字形）。
+    let trimmed = text.trim_end();
+    if trimmed.chars().last().is_some_and(is_break_hyphen) {
+        text.truncate(trimmed.len());
+        if lowercase_next {
+            text.pop(); // 断字连接：丢掉连字符，直接接上
+        }
+        text.push_str(&addition);
         return;
     }
     let previous_ascii = text
@@ -166,6 +192,16 @@ fn append_line(text: &mut String, line: &TextLine) {
         text.push(' ');
     }
     text.push_str(&addition);
+}
+
+/// 断行连字符：ASCII `-` 与 Unicode 连字符 U+2010/U+2011。
+fn is_break_hyphen(ch: char) -> bool {
+    matches!(ch, '-' | '\u{2010}' | '\u{2011}')
+}
+
+/// 不可映射字符：非字符 U+FFFE/U+FFFD 与控制符（空白除外）。
+fn is_noise_char(ch: char) -> bool {
+    matches!(ch, '\u{FFFE}' | '\u{FFFD}') || (ch.is_control() && !ch.is_whitespace())
 }
 
 /// 数学字体名单（[待定] 可扩展）。
@@ -213,6 +249,52 @@ mod tests {
             h: 10.0,
             size: 10.0,
         }
+    }
+
+    #[test]
+    fn dehyphenates_line_breaks() {
+        // 行尾连字符 + 小写开头：去掉连字符直接接上。
+        let mut text = String::new();
+        append_line(&mut text, &line("we are recently expe-", 50.0, 100.0));
+        append_line(&mut text, &line("riencing an important trend", 50.0, 112.0));
+        assert_eq!(text, "we are recently experiencing an important trend");
+
+        // 行尾连字符 + 数字/大写开头：保留连字符，不加空格。
+        let mut text = String::new();
+        append_line(&mut text, &line("COVID-", 50.0, 100.0));
+        append_line(&mut text, &line("19 pandemic", 50.0, 112.0));
+        assert_eq!(text, "COVID-19 pandemic");
+    }
+
+    #[test]
+    fn unmapped_hyphen_glyph_is_handled() {
+        // PDF 断字连字符缺 Unicode 映射时提取为 U+FFFE：按连字符语义处理。
+        let mut text = String::new();
+        append_line(&mut text, &line("expe\u{FFFE}", 50.0, 100.0));
+        append_line(&mut text, &line("riencing", 50.0, 112.0));
+        assert_eq!(text, "experiencing");
+
+        // 实际 PDF（pdfium 裸码点）里常见的是控制符，且标记后可能跟着空白字形。
+        let mut text = String::new();
+        append_line(&mut text, &line("expe\u{2}", 50.0, 100.0));
+        append_line(&mut text, &line("riencing", 50.0, 112.0));
+        assert_eq!(text, "experiencing");
+
+        let mut text = String::new();
+        append_line(&mut text, &line("expe\u{2} ", 50.0, 100.0));
+        append_line(&mut text, &line("riencing", 50.0, 112.0));
+        assert_eq!(text, "experiencing");
+
+        let mut text = String::new();
+        append_line(&mut text, &line("expe\u{2}", 50.0, 100.0));
+        append_line(&mut text, &line(" riencing", 50.0, 112.0));
+        assert_eq!(text, "experiencing");
+
+        // 行中的不可映射字符直接丢弃，不影响拼接。
+        let mut text = String::new();
+        append_line(&mut text, &line("hel\u{FFFE}lo", 50.0, 100.0));
+        append_line(&mut text, &line("world", 50.0, 112.0));
+        assert_eq!(text, "hello world");
     }
 
     #[test]
