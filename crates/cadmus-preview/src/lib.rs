@@ -46,7 +46,7 @@ const HEAD: &str = r#"<!doctype html>
 const STYLE: &str = r#"<style>
 :root {
   --fs: 18px; --lh: 1.7; --width: 40rem;
-  --pad: 1.25rem; --align: left;
+  --pad: 1.25rem; --align: left; --para: 0.9em; --indent: 0em;
   --font: "Noto Serif CJK SC", "Source Han Serif SC", "Songti SC", Georgia, serif;
   --bg: #ffffff; --fg: #1a1a1a; --muted: #8a8a8a; --soft: rgba(127,127,127,.14);
 }
@@ -74,7 +74,7 @@ main {
   text-align: var(--align);
 }
 main h1 { font-size: 1.5em; } main h2 { font-size: 1.25em; }
-p { margin: .9em 0; }
+p { margin: var(--para) 0; text-indent: var(--indent); }
 .byline { color: var(--muted); margin-top: -.6em; }
 .footnote { font-size: .92em; color: var(--muted); margin: 1.2rem 0; padding-top: .8rem; border-top: 1px solid var(--soft); }
 img { max-width: 100%; height: auto; }
@@ -179,7 +179,7 @@ const SCRIPT: &str = r#"<script>
     sans: '-apple-system, "PingFang SC", "Noto Sans CJK SC", "Helvetica Neue", sans-serif',
     kai: '"Kaiti SC", "STKaiti", "KaiTi", "AR PL UKai CN", serif'
   };
-  var defaults = { fs: 18, lh: 1.7, width: 40, margin: 1.25, font: 'serif', theme: 'day', align: 'left', mode: 'scroll' };
+  var defaults = { fs: 18, lh: 1.7, width: 40, margin: 1.25, font: 'serif', theme: 'day', align: 'left', mode: 'scroll', para: 0.9, indent: 0 };
   var settings = {};
   for (var key in defaults) settings[key] = defaults[key];
   try {
@@ -196,6 +196,8 @@ const SCRIPT: &str = r#"<script>
     root.style.setProperty('--width', settings.width + 'rem');
     root.style.setProperty('--pad', settings.margin + 'rem');
     root.style.setProperty('--align', settings.align === 'justify' ? 'justify' : 'left');
+    root.style.setProperty('--para', settings.para + 'em');
+    root.style.setProperty('--indent', settings.indent + 'em');
     root.style.setProperty('--font', FONTS[settings.font] || FONTS.serif);
     body.setAttribute('data-theme', settings.theme);
     body.setAttribute('data-mode', settings.mode === 'paged' ? 'paged' : 'scroll');
@@ -207,6 +209,10 @@ const SCRIPT: &str = r#"<script>
     document.getElementById('v-lh').textContent = settings.lh.toFixed(2);
     document.getElementById('v-width').textContent = settings.width + 'rem';
     document.getElementById('v-margin').textContent = settings.margin + 'rem';
+    document.getElementById('s-para').value = settings.para;
+    document.getElementById('s-indent').value = settings.indent;
+    document.getElementById('v-para').textContent = settings.para.toFixed(1) + 'em';
+    document.getElementById('v-indent').textContent = settings.indent.toFixed(1) + 'em';
     markChips('c-font', 'font');
     markChips('c-theme', 'theme');
     markChips('c-align', 'align');
@@ -234,6 +240,8 @@ const SCRIPT: &str = r#"<script>
   document.getElementById('s-lh').addEventListener('input', function () { settings.lh = +this.value; apply(); });
   document.getElementById('s-width').addEventListener('input', function () { settings.width = +this.value; apply(); });
   document.getElementById('s-margin').addEventListener('input', function () { settings.margin = +this.value; apply(); });
+  document.getElementById('s-para').addEventListener('input', function () { settings.para = +this.value; apply(); });
+  document.getElementById('s-indent').addEventListener('input', function () { settings.indent = +this.value; apply(); });
 
   buildChips('c-font', [['serif', '宋体'], ['sans', '黑体'], ['kai', '楷体']], 'font');
   buildChips('c-theme', [['day', '日间'], ['sepia', '米黄'], ['green', '护眼'], ['night', '深灰'], ['black', '纯黑']], 'theme');
@@ -592,6 +600,8 @@ pub fn render_to_string(
     html.push_str("<div class=\"srow\"><label>行距</label><input id=\"s-lh\" type=\"range\" min=\"1.3\" max=\"2.2\" step=\"0.05\"><span class=\"val\" id=\"v-lh\"></span></div>\n");
     html.push_str("<div class=\"srow\"><label>行宽</label><input id=\"s-width\" type=\"range\" min=\"26\" max=\"56\" step=\"1\"><span class=\"val\" id=\"v-width\"></span></div>\n");
     html.push_str("<div class=\"srow\"><label>边距</label><input id=\"s-margin\" type=\"range\" min=\"0.5\" max=\"4\" step=\"0.25\"><span class=\"val\" id=\"v-margin\"></span></div>\n");
+    html.push_str("<div class=\"srow\"><label>段距</label><input id=\"s-para\" type=\"range\" min=\"0\" max=\"2\" step=\"0.1\"><span class=\"val\" id=\"v-para\"></span></div>\n");
+    html.push_str("<div class=\"srow\"><label>缩进</label><input id=\"s-indent\" type=\"range\" min=\"0\" max=\"2\" step=\"0.1\"><span class=\"val\" id=\"v-indent\"></span></div>\n");
     html.push_str(
         "<div class=\"srow\"><label>对齐</label><div class=\"chips\" id=\"c-align\"></div></div>\n",
     );
@@ -975,6 +985,8 @@ mod tests {
         assert!(html.contains("data-mode=\"scroll\""), "缺初始翻页模式标记");
         assert!(html.contains("#toc a.on"), "缺目录当前章高亮样式");
         assert!(html.contains("updateTocCurrent"), "缺目录当前章同步逻辑");
+        assert!(html.contains("s-para"), "缺段距滑条");
+        assert!(html.contains("s-indent"), "缺首行缩进滑条");
     }
 
     #[test]

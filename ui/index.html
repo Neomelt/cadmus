@@ -111,6 +111,20 @@
     color: #d9534f; background: transparent; border: 0; cursor: pointer; padding: .15rem .3rem;
   }
   .ann-empty { font-size: .85rem; opacity: .5; padding: 1rem 0; }
+  .ann-head { display: flex; align-items: center; justify-content: space-between; }
+  #ann-close {
+    font: inherit; font-size: .85rem; padding: .3rem .65rem; border-radius: 8px;
+    border: 1px solid rgba(127, 127, 127, .35); background: transparent;
+    color: CanvasText; cursor: pointer;
+  }
+  .continue-card {
+    display: flex; justify-content: space-between; align-items: center; gap: 1rem;
+    padding: .8rem 1rem; margin: 0 0 1rem; border-radius: 14px;
+    border: 1px solid rgba(127, 127, 127, .28); cursor: pointer;
+  }
+  .continue-card .label { font-size: .78rem; letter-spacing: .12em; opacity: .5; }
+  .continue-card h2 { margin: .15rem 0 0; font-size: 1rem; }
+  .continue-card .pct { font-size: .85rem; opacity: .6; flex: none; }
   #btn-search {
     position: fixed; z-index: 10;
     top: max(.6rem, env(safe-area-inset-top)); right: max(6rem, calc(env(safe-area-inset-right) + 5.6rem));
@@ -189,6 +203,7 @@
   </div>
   <input id="shelf-search" type="search" placeholder="搜索书库（书名 / 作者）">
   <p class="section-title">书库</p>
+  <div id="continue"></div>
   <div class="books" id="books"></div>
   <p class="hint">
     支持导入 EPUB / TXT / PDF。导入后在书库点开阅读；导出标注到 Markdown 在「标注」面板。<br>
@@ -209,7 +224,7 @@
   <div id="search-results"></div>
 </div>
 <aside id="ann-panel">
-  <h3>标注</h3>
+  <div class="ann-head"><h3>标注</h3><button id="ann-close" title="关闭">✕ 关闭</button></div>
   <div class="ann-filter" id="ann-filter"></div>
   <div id="ann-list"></div>
   <h3 class="ann-sub">书签</h3>
@@ -255,9 +270,37 @@
       return Math.max(1, Math.round(bytes / 1024)) + ' KB';
     }
 
+    function renderContinue(all) {
+      const wrap = document.getElementById('continue');
+      wrap.innerHTML = '';
+      const reading = all
+        .filter(function (book) { return (book.progress || 0) > 0.01 && (book.progress || 0) < 0.98; })
+        .sort(function (a, b) { return (b.last_read_at || 0) - (a.last_read_at || 0); })[0];
+      if (!reading) return;
+      const card = document.createElement('div');
+      card.className = 'continue-card';
+      const left = document.createElement('div');
+      const label = document.createElement('span');
+      label.className = 'label';
+      label.textContent = '继续阅读';
+      const title = document.createElement('h2');
+      title.textContent = reading.title;
+      left.appendChild(label);
+      left.appendChild(title);
+      const pct = document.createElement('span');
+      pct.className = 'pct';
+      pct.textContent = Math.round((reading.progress || 0) * 100) + '%';
+      card.appendChild(left);
+      card.appendChild(pct);
+      card.addEventListener('click', function () { openBook(reading.id, reading.format); });
+      wrap.appendChild(card);
+    }
+
     async function refresh() {
       try {
-        let list = await invoke('list_books');
+        const all = await invoke('list_books');
+        renderContinue(all);
+        let list = all.slice();
         const query = (shelfQuery || '').trim().toLowerCase();
         if (query) {
           list = list.filter(function (book) {
@@ -634,6 +677,10 @@
     btnAnn.addEventListener('click', function () {
       toggleAnnPanel();
       if (annPanelOpen) refreshAnnotations();
+    });
+
+    document.getElementById('ann-close').addEventListener('click', function () {
+      toggleAnnPanel(false);
     });
 
     document.getElementById('btn-export').addEventListener('click', async function () {
