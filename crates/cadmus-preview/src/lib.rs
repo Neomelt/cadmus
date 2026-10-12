@@ -114,6 +114,16 @@ footer { margin-top: 3rem; color: var(--muted); font-size: .8em; text-align: cen
   background: transparent; color: var(--fg);
 }
 .chips button.on { border-color: var(--fg); background: var(--soft); }
+#pbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 25;
+  display: flex; align-items: center; gap: .6rem;
+  padding: .35rem .8rem calc(.4rem + env(safe-area-inset-bottom));
+  background: var(--bg); border-top: 1px solid var(--soft);
+  font-family: system-ui, sans-serif; font-size: 12px; color: var(--muted);
+}
+#pbar input[type="range"] { flex: 1; accent-color: var(--fg); height: 18px; }
+#pbar .chap { max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pbar .pct { min-width: 4ch; text-align: right; font-variant-numeric: tabular-nums; }
 #scrim { position: fixed; inset: 0; z-index: 35; background: rgba(0,0,0,.35); display: none; }
 #scrim.open { display: block; }
 mark.hl { border-radius: 3px; padding: 0 .06em; }
@@ -256,6 +266,38 @@ const SCRIPT: &str = r#"<script>
   if (headings.length === 0) nav.innerHTML = '<p style="color:var(--muted)">（没有可导航的标题）</p>';
 
   apply();
+
+  // ---- 底部进度条（对齐 Books/Kindle）----
+  var pbar = document.getElementById('pbar-range');
+  var pbarPct = document.getElementById('pbar-pct');
+  var pbarChap = document.getElementById('pbar-chap');
+  var pbarSyncing = false;
+
+  function currentHeadingText() {
+    var headings = document.querySelectorAll('h1[data-block], h2[data-block]');
+    var last = '';
+    for (var i = 0; i < headings.length; i++) {
+      if (headings[i].getBoundingClientRect().top <= 80) { last = headings[i].textContent; } else { break; }
+    }
+    return last;
+  }
+  function updatePbar() {
+    if (pbarSyncing) return;
+    var max = document.documentElement.scrollHeight - window.innerHeight;
+    var ratio = max > 0 ? Math.min(1, Math.max(0, window.scrollY / max)) : 1;
+    pbar.value = Math.round(ratio * 1000);
+    pbarPct.textContent = Math.round(ratio * 100) + '%';
+    pbarChap.textContent = currentHeadingText();
+  }
+  window.addEventListener('scroll', updatePbar, { passive: true });
+  window.addEventListener('resize', updatePbar);
+  pbar.addEventListener('input', function () {
+    pbarSyncing = true;
+    var max = document.documentElement.scrollHeight - window.innerHeight;
+    window.scrollTo(0, (+this.value / 1000) * max);
+  });
+  pbar.addEventListener('change', function () { pbarSyncing = false; updatePbar(); });
+  updatePbar();
 
   // ---- 批注（高亮/笔记）----
   var annBar = document.getElementById('ann-bar');
@@ -503,6 +545,7 @@ pub fn render_to_string(
 
     html.push_str("<div id=\"scrim\"></div>\n");
     html.push_str("<aside id=\"toc\"><nav id=\"toc-nav\"></nav></aside>\n");
+    html.push_str("<div id=\"pbar\"><span class=\"chap\" id=\"pbar-chap\"></span><input id=\"pbar-range\" type=\"range\" min=\"0\" max=\"1000\" value=\"0\" aria-label=\"阅读进度\"><span class=\"pct\" id=\"pbar-pct\">0%</span></div>\n");
     html.push_str(
         "<div id=\"ann-bar\"></div>\n<div id=\"ann-note\"><textarea placeholder=\"写笔记…\"></textarea><div class=\"row\"><button id=\"ann-note-cancel\">取消</button><button id=\"ann-note-save\">保存</button></div></div>\n",
     );
@@ -885,6 +928,8 @@ mod tests {
         assert!(html.contains("楷体"), "缺字体选项");
         assert!(html.contains("边距"), "缺边距滑条");
         assert!(html.contains("两端对齐"), "缺对齐选项");
+        assert!(html.contains("pbar-range"), "缺底部进度条");
+        assert!(html.contains("pbar-chap"), "缺进度条章节名");
     }
 
     #[test]
