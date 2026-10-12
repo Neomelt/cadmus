@@ -431,6 +431,8 @@ pub fn delete_entry(dir: &Path, id: &str) -> Result<(), String> {
     let _ = fs::remove_file(resolve_stored(dir, &entry.file));
     // 清掉整份导出资产（封面 + 正文图片）。
     let _ = fs::remove_dir_all(assets_dir(dir, &entry.id));
+    // 批注随书删除，避免重导入后旧标注复活（FR-1.4 无残留）。
+    let _ = fs::remove_file(dir.join("annotations").join(format!("{}.json", entry.id)));
     if let Some(cover) = &entry.cover {
         // 兼容旧数据：封面可能存放在 covers/<id>/。
         let cover_path = resolve_stored(dir, cover);
@@ -514,7 +516,11 @@ fn find_query(text: &str, query: &str) -> Option<usize> {
         return Some(position);
     }
     if query.is_ascii() {
-        return text.to_lowercase().find(&query.to_lowercase());
+        let lowered = text.to_lowercase();
+        // 仅当 lowercase 不改变字节长度时（纯 ASCII 映射稳定）才可用偏移回退。
+        if lowered.len() == text.len() {
+            return lowered.find(&query.to_lowercase());
+        }
     }
     None
 }

@@ -56,7 +56,7 @@ pub fn render_page_to_png(
         .map_err(|error| Error::Parse(format!("PDF 打开失败：{error}")))?;
     let page = document
         .pages()
-        .get(page_number as i32)
+        .get(page_number as i32 - 1)
         .map_err(|error| Error::Parse(format!("页读取失败：{error}")))?;
     let raster = raster::render_page(&page, scale)?;
     raster.save_all(out)?;
@@ -229,7 +229,7 @@ pub fn reflow(path: &Path, options: &ReflowOptions, cancel: &Cancel) -> Result<D
                 id: stable_block_id(doc_hash, index, seq),
                 kind,
                 order,
-                page_range: Some((index, index)),
+                page_range: Some((page_number, page_number)),
                 payload,
             });
             order += 1;
@@ -266,7 +266,7 @@ fn push_page_bitmap(
                 height_px: raster.height_px(),
             },
         )
-        .with_page_range((index, index)),
+        .with_page_range((page_number, page_number)),
     );
     *order += 1;
     Ok(())

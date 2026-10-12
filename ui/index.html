@@ -903,6 +903,7 @@
                 restoreProgress();
               }
             } catch (error) {}
+            if (saveTimer) { clearInterval(saveTimer); saveTimer = null; }
             saveTimer = setInterval(saveProgress, 5000);
           };
           frame.srcdoc = html;
