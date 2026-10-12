@@ -40,6 +40,41 @@ fn assets_dir(dir: &Path, id: &str) -> PathBuf {
     dir.join("assets").join(id)
 }
 
+/// 存储路径：尽量存相对数据目录的路径（iOS 更新会更换沙箱容器，绝对路径会失效）。
+fn store_relative(dir: &Path, path: &str) -> String {
+    Path::new(path)
+        .strip_prefix(dir)
+        .map(|relative| relative.display().to_string())
+        .unwrap_or_else(|_| path.to_string())
+}
+
+/// 解析存储路径：相对路径基于当前数据目录补全；绝对路径原样使用（旧数据）。
+pub(crate) fn resolve_stored(dir: &Path, stored: &str) -> PathBuf {
+    let path = Path::new(stored);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        dir.join(path)
+    }
+}
+
+/// 旧版绝对路径自愈：容器搬迁后按 `books/`/`assets/`/`covers/` 尾部在当前目录下重建。
+fn heal_stored(dir: &Path, stored: &str) -> Option<String> {
+    if !Path::new(stored).is_absolute() {
+        return None;
+    }
+    for segment in ["books", "assets", "covers"] {
+        let marker = format!("/{segment}/");
+        if let Some((_, tail)) = stored.rsplit_once(marker.as_str()) {
+            let relative = format!("{segment}/{tail}");
+            if dir.join(&relative).exists() {
+                return Some(relative);
+            }
+        }
+    }
+    None
+}
+
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -47,12 +82,32 @@ fn now() -> u64 {
         .unwrap_or(0)
 }
 
-/// 读取索引（不存在或损坏时返回空）。
+/// 读取索引（不存在或损坏时返回空）；旧版失效绝对路径会自愈为相对路径并落盘。
 pub fn load(dir: &Path) -> Vec<BookEntry> {
-    fs::read_to_string(lib_path(dir))
-        .ok()
-        .and_then(|raw| serde_json::from_str(&raw).ok())
-        .unwrap_or_default()
+    let Some(raw) = fs::read_to_string(lib_path(dir)).ok() else {
+        return Vec::new();
+    };
+    let Ok(mut entries) = serde_json::from_str::<Vec<BookEntry>>(&raw) else {
+        return Vec::new();
+    };
+    // 自愈：容器搬迁（iOS 更新）后把失效的绝对路径改回相对路径。
+    let mut changed = false;
+    for entry in &mut entries {
+        if let Some(healed) = heal_stored(dir, &entry.file) {
+            entry.file = healed;
+            changed = true;
+        }
+        if let Some(cover) = entry.cover.clone()
+            && let Some(healed) = heal_stored(dir, &cover)
+        {
+            entry.cover = Some(healed);
+            changed = true;
+        }
+    }
+    if changed {
+        let _ = save(dir, &entries);
+    }
+    entries
 }
 
 fn save(dir: &Path, entries: &[BookEntry]) -> Result<(), String> {
@@ -101,8 +156,8 @@ pub fn ingest(
         title,
         author,
         format: ext.to_string(),
-        file: file.display().to_string(),
-        cover,
+        file: store_relative(dir, &file.display().to_string()),
+        cover: cover.map(|path| store_relative(dir, &path)),
         size: bytes.len() as u64,
         added_at: now(),
         progress: 0.0,
@@ -138,7 +193,13 @@ pub fn read_entry(dir: &Path, id: &str) -> Result<String, String> {
         .into_iter()
         .find(|entry| entry.id == id)
         .ok_or_else(|| format!("未找到书籍：{id}"))?;
-    let bytes = fs::read(&entry.file).map_err(|error| format!("读取文件失败：{error}"))?;
+    let file_path = resolve_stored(dir, &entry.file);
+    let bytes = fs::read(&file_path)
+        .map_err(|error| format!("读取文件失败（{}）：{error}", file_path.display()))?;
+    let cover_path = entry
+        .cover
+        .as_deref()
+        .map(|cover| resolve_stored(dir, cover).display().to_string());
 
     match entry.format.as_str() {
         "txt" => {
@@ -149,7 +210,7 @@ pub fn read_entry(dir: &Path, id: &str) -> Result<String, String> {
                 &document,
                 Some(entry.title.as_str()),
                 entry.author.as_deref(),
-                entry.cover.as_deref(),
+                cover_path.as_deref(),
             )
         }
         "pdf" => read_pdf(dir, &entry),
@@ -171,8 +232,8 @@ pub fn read_entry(dir: &Path, id: &str) -> Result<String, String> {
                     .first()
                     .map(String::as_str)
                     .or(entry.author.as_deref()),
-                // 旧数据封面可能存在别处，索引里的路径优先。
-                entry.cover.as_deref().or(report.cover_path.as_deref()),
+                // 旧数据封面可能存在别处，索引里的路径优先（已解析为当前容器路径）。
+                cover_path.as_deref().or(report.cover_path.as_deref()),
             )
         }
     }
@@ -190,7 +251,7 @@ fn read_pdf(dir: &Path, entry: &BookEntry) -> Result<String, String> {
     }
     let options = cadmus_reflow::ReflowOptions::new(&assets);
     let cancel = cadmus_core::Cancel::new();
-    let document = cadmus_reflow::reflow(Path::new(&entry.file), &options, &cancel)
+    let document = cadmus_reflow::reflow(&resolve_stored(dir, &entry.file), &options, &cancel)
         .map_err(|error| format!("PDF 重排失败：{error}"))?;
     let html = render_document(&document, Some(entry.title.as_str()), None, None)?;
     if let Err(error) = fs::write(&cached, &html) {
@@ -267,13 +328,14 @@ pub fn delete_entry(dir: &Path, id: &str) -> Result<(), String> {
         return Err("内置示例书不可删除".into());
     }
     let entry = entries.remove(position);
-    let _ = fs::remove_file(&entry.file);
+    let _ = fs::remove_file(resolve_stored(dir, &entry.file));
     // 清掉整份导出资产（封面 + 正文图片）。
     let _ = fs::remove_dir_all(assets_dir(dir, &entry.id));
     if let Some(cover) = &entry.cover {
         // 兼容旧数据：封面可能存放在 covers/<id>/。
-        let _ = fs::remove_file(cover);
-        if let Some(parent) = Path::new(cover).parent() {
+        let cover_path = resolve_stored(dir, cover);
+        let _ = fs::remove_file(&cover_path);
+        if let Some(parent) = cover_path.parent() {
             let _ = fs::remove_dir(parent);
         }
     }
@@ -449,6 +511,55 @@ mod tests {
         let cached = read_entry(&dir, &entry.id).unwrap();
         assert_eq!(html, cached, "二次读取应命中缓存");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// iOS 更新后沙箱容器路径变化：旧版索引的绝对路径应自愈为相对路径，读取/删除正常。
+    #[test]
+    fn heals_legacy_absolute_paths() {
+        let dir = temp_dir("heal");
+        let sample = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sample/sample.epub");
+        let bytes = fs::read(&sample).unwrap();
+        ingest(&dir, &bytes, "epub", "旧书", false, Some("heal1".into())).unwrap();
+
+        // 模拟旧版索引：文件与封面都存成绝对路径。
+        let mut entries = load(&dir);
+        let index = entries
+            .iter()
+            .position(|entry| entry.id == "heal1")
+            .unwrap();
+        let abs_file = dir.join(&entries[index].file);
+        entries[index].file = abs_file.display().to_string();
+        let abs_cover = entries[index].cover.as_ref().map(|cover| dir.join(cover));
+        if let Some(cover) = abs_cover {
+            entries[index].cover = Some(cover.display().to_string());
+        }
+        save(&dir, &entries).unwrap();
+
+        // 容器搬家：iOS 更新会把数据迁移到新容器路径。
+        let moved = temp_dir("heal-moved");
+        fs::rename(&dir, &moved).unwrap();
+
+        // 加载即自愈：路径转回相对路径。
+        let healed = load(&moved);
+        let book = healed.iter().find(|entry| entry.id == "heal1").unwrap();
+        assert_eq!(book.file, "books/heal1.epub", "绝对路径应自愈为相对路径");
+        assert!(
+            book.cover
+                .as_deref()
+                .is_some_and(|cover| cover.starts_with("assets/")),
+            "封面路径同样自愈：{:?}",
+            book.cover
+        );
+
+        // 搬家后读取与删除都正常。
+        let html = read_entry(&moved, "heal1").unwrap();
+        assert!(html.contains("第一章"), "搬家后仍可阅读");
+        delete_entry(&moved, "heal1").unwrap();
+        assert!(
+            load(&moved).iter().all(|entry| entry.id != "heal1"),
+            "删除应生效"
+        );
+        let _ = fs::remove_dir_all(&moved);
     }
 
     #[test]

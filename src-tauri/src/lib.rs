@@ -23,12 +23,13 @@ struct BookView {
     cover_data: Option<String>,
 }
 
-fn to_view(entry: &library::BookEntry) -> BookView {
+fn to_view(dir: &std::path::Path, entry: &library::BookEntry) -> BookView {
     // 列表封面给较小上限（400 KB），避免书库一次性铺满内存。
     let cover_data = entry
         .cover
         .as_ref()
-        .and_then(|path| library::data_url(path, 400_000));
+        .map(|cover| library::resolve_stored(dir, cover))
+        .and_then(|path| library::data_url(&path.display().to_string(), 400_000));
     BookView {
         id: entry.id.clone(),
         title: entry.title.clone(),
@@ -54,7 +55,10 @@ fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 #[tauri::command]
 fn list_books(app: tauri::AppHandle) -> Result<Vec<BookView>, String> {
     let dir = data_dir(&app)?;
-    Ok(library::load(&dir).iter().map(to_view).collect())
+    Ok(library::load(&dir)
+        .iter()
+        .map(|entry| to_view(&dir, entry))
+        .collect())
 }
 
 #[tauri::command]
@@ -76,7 +80,7 @@ fn import_book(app: tauri::AppHandle, path: String) -> Result<BookView, String> 
         .map(|stem| stem.to_string_lossy().into_owned())
         .unwrap_or_else(|| "未命名".to_string());
     let entry = library::ingest(&dir, &bytes, &ext, &fallback, false, None)?;
-    Ok(to_view(&entry))
+    Ok(to_view(&dir, &entry))
 }
 
 /// 读取文件选择器带回的文件。
