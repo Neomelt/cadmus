@@ -235,6 +235,20 @@ fn export_markdown(app: tauri::AppHandle, id: String) -> Result<String, String> 
     library::export_markdown(&dir, &id, &export_dir)
 }
 
+#[tauri::command]
+fn pdf_page(app: tauri::AppHandle, id: String, page: u32) -> Result<PageView, String> {
+    let dir = data_dir(&app)?;
+    let (src, total) = library::pdf_page(&dir, &id, page)?;
+    Ok(PageView { src, total, page })
+}
+
+#[derive(Serialize)]
+struct PageView {
+    src: String,
+    total: u32,
+    page: u32,
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -253,7 +267,8 @@ pub fn run() {
             delete_annotation,
             add_bookmark,
             delete_bookmark,
-            export_markdown
+            export_markdown,
+            pdf_page
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

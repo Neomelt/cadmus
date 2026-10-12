@@ -343,6 +343,39 @@ fn render_document(
         .map_err(|error| error.to_string())
 }
 
+/// 原文页视图：渲染单页为 data URL（带磁盘缓存）。返回（data URL, 总页数）。
+pub fn pdf_page(dir: &Path, id: &str, page: u32) -> Result<(String, u32), String> {
+    let entries = load(dir);
+    let entry = entries
+        .iter()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| format!("未找到书籍：{id}"))?;
+    if entry.format != "pdf" {
+        return Err("原文页视图仅支持 PDF".into());
+    }
+    let assets = assets_dir(dir, id);
+    fs::create_dir_all(&assets).map_err(|error| error.to_string())?;
+    let cached = assets.join(format!("orig-p{page}.png"));
+    if !cached.exists() {
+        cadmus_reflow::render_page_to_png(&resolve_stored(dir, &entry.file), page, 2.0, &cached)
+            .map_err(|error| format!("页面渲染失败：{error}"))?;
+    }
+    let src = data_url(&cached.display().to_string(), MAX_INLINE_ASSET)
+        .ok_or_else(|| "页面渲染结果过大".to_string())?;
+    // 总页数：取重排文档里的最大原页（首次打开后可用）。
+    let total = parse_document(dir, entry)
+        .and_then(|document| {
+            document
+                .blocks
+                .iter()
+                .filter_map(|block| block.page_range)
+                .map(|(_, end)| end)
+                .max()
+        })
+        .unwrap_or(page);
+    Ok((src, total))
+}
+
 /// 内联图片体积上限：超过则不内联（避免阅读 HTML 失控）。
 const MAX_INLINE_ASSET: u64 = 2_500_000;
 
@@ -799,6 +832,18 @@ mod tests {
         assert!(
             assets_dir(&dir, &entry.id).join(REFLOW_DOC_CACHE).exists(),
             "重排结果应缓存到 assets/<id>/"
+        );
+
+        // 原文页视图：渲染一页并缓存。
+        let (src, total) = pdf_page(&dir, "pdf1", 1).unwrap();
+        assert!(
+            src.starts_with("data:image/png;base64,"),
+            "原文页应为 data URL"
+        );
+        assert!(total >= 1, "总页数有效");
+        assert!(
+            assets_dir(&dir, "pdf1").join("orig-p1.png").exists(),
+            "原文页应缓存"
         );
 
         // 缓存命中：二次读取直接返回缓存内容。

@@ -591,10 +591,15 @@ fn render_block(html: &mut String, block: &Block, base: &Path, meta: &PreviewMet
             );
         }
         (_, Payload::Text(text)) => {
+            let page_attr = match block.page_range {
+                Some((start, _)) => format!(" data-page=\"{start}\""),
+                None => String::new(),
+            };
             let _ = writeln!(
                 html,
-                "<p data-block=\"{}\">{}</p>",
+                "<p data-block=\"{}\"{}>{}</p>",
                 block.id,
+                page_attr,
                 marked_text(text, block.id, meta.marks)
             );
         }
@@ -836,6 +841,17 @@ mod tests {
             html.contains("<aside class=\"footnote\" data-block=\"3\">脚注正文：解释。</aside>"),
             "脚注块应渲染为 aside.footnote（带块锚点）"
         );
+    }
+
+    #[test]
+    fn pdf_blocks_carry_page_anchor() {
+        let document = Document {
+            doc_hash: 1,
+            title: None,
+            blocks: vec![Block::text(9, BlockKind::Paragraph, 0, "正文").with_page_range((7, 7))],
+        };
+        let html = render_to_string(&document, Path::new(""), &base_meta("t")).unwrap();
+        assert!(html.contains("data-page=\"7\""), "PDF 块应带原页锚点");
     }
 
     #[test]

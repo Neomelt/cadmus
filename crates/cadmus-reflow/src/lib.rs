@@ -43,6 +43,26 @@ impl ReflowOptions {
     }
 }
 
+/// 渲染 PDF 单页为 PNG 文件（原文页视图用）。返回（宽, 高）像素。
+pub fn render_page_to_png(
+    path: &Path,
+    page_number: u32,
+    scale: f32,
+    out: &Path,
+) -> Result<(u32, u32)> {
+    let pdfium = parse::bind_pdfium().map_err(Error::Unsupported)?;
+    let document = pdfium
+        .load_pdf_from_file(path, None)
+        .map_err(|error| Error::Parse(format!("PDF 打开失败：{error}")))?;
+    let page = document
+        .pages()
+        .get(page_number as i32)
+        .map_err(|error| Error::Parse(format!("页读取失败：{error}")))?;
+    let raster = raster::render_page(&page, scale)?;
+    raster.save_all(out)?;
+    Ok((raster.width_px(), raster.height_px()))
+}
+
 /// 读取 PDF 元数据（标题/作者）。无 pdfium 或读取失败返回 `None`（调用方回退文件名）。
 pub fn pdf_metadata(path: &Path) -> Option<(Option<String>, Option<String>)> {
     let pdfium = parse::bind_pdfium().ok()?;
