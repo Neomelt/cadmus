@@ -92,6 +92,7 @@ footer { margin-top: 3rem; color: var(--muted); font-size: .8em; text-align: cen
 }
 #toc.open { transform: none; }
 #toc a { display: block; padding: .45rem .2rem; color: var(--fg); text-decoration: none; border-bottom: 1px solid var(--soft); }
+#toc a.on { background: var(--soft); border-radius: 6px; font-weight: 600; }
 #sheet {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
   max-height: 72vh; overflow: auto;
@@ -265,7 +266,7 @@ const SCRIPT: &str = r#"<script>
     document.getElementById(id).classList.add('open');
     scrim.classList.add('open');
   }
-  document.getElementById('toc-btn').addEventListener('click', function () { openOne('toc'); });
+  document.getElementById('toc-btn').addEventListener('click', function () { openOne('toc'); updateTocCurrent(); });
   document.getElementById('set-btn').addEventListener('click', function () { openOne('sheet'); });
   scrim.addEventListener('click', closeAll);
 
@@ -282,6 +283,24 @@ const SCRIPT: &str = r#"<script>
     nav.appendChild(a);
   }
   if (headings.length === 0) nav.innerHTML = '<p style="color:var(--muted)">（没有可导航的标题）</p>';
+
+  var tocLinks = nav.querySelectorAll('a');
+  function updateTocCurrent() {
+    if (tocLinks.length === 0) return;
+    var current = -1;
+    for (var i = 0; i < headings.length; i++) {
+      if (headings[i].getBoundingClientRect().top <= 96) { current = i; } else { break; }
+    }
+    var active = null;
+    for (var j = 0; j < tocLinks.length; j++) {
+      var on = j === current;
+      tocLinks[j].classList.toggle('on', on);
+      if (on) active = tocLinks[j];
+    }
+    if (active && document.getElementById('toc').classList.contains('open')) {
+      active.scrollIntoView({ block: 'nearest' });
+    }
+  }
 
   apply();
 
@@ -306,6 +325,7 @@ const SCRIPT: &str = r#"<script>
     pbar.value = Math.round(ratio * 1000);
     pbarPct.textContent = Math.round(ratio * 100) + '%';
     pbarChap.textContent = currentHeadingText();
+    updateTocCurrent();
   }
   window.addEventListener('scroll', updatePbar, { passive: true });
   window.addEventListener('resize', updatePbar);
@@ -953,6 +973,8 @@ mod tests {
         assert!(html.contains("pbar-chap"), "缺进度条章节名");
         assert!(html.contains("整屏翻页"), "缺翻页模式选项");
         assert!(html.contains("data-mode=\"scroll\""), "缺初始翻页模式标记");
+        assert!(html.contains("#toc a.on"), "缺目录当前章高亮样式");
+        assert!(html.contains("updateTocCurrent"), "缺目录当前章同步逻辑");
     }
 
     #[test]
