@@ -50,6 +50,28 @@ jobs:
       - name: build unsigned ipa
         run: |
           tauri ios build --no-sign --ci 2>&1 | tee /tmp/ios-build.log
+      - name: fetch pdfium (iOS arm64)
+        run: |
+          curl -sL --retry 3 -o /tmp/pdfium-ios.tgz \
+            "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8086/pdfium-ios-device-arm64.tgz"
+          mkdir -p /tmp/pdfium
+          tar xzf /tmp/pdfium-ios.tgz -C /tmp/pdfium lib/libpdfium.dylib
+          file /tmp/pdfium/lib/libpdfium.dylib
+          ls -la /tmp/pdfium/lib
+      - name: embed pdfium into ipa
+        run: |
+          IPA=$(find src-tauri/gen/apple -name '*.ipa' | head -1)
+          echo "ipa=$IPA"
+          test -n "$IPA"
+          rm -rf /tmp/ipa && mkdir -p /tmp/ipa
+          unzip -q "$IPA" -d /tmp/ipa
+          APP=$(find /tmp/ipa/Payload -maxdepth 1 -name '*.app' | head -1)
+          echo "app=$APP"
+          test -n "$APP"
+          mkdir -p "$APP/Frameworks"
+          cp /tmp/pdfium/lib/libpdfium.dylib "$APP/Frameworks/"
+          (cd /tmp/ipa && zip -qry "$OLDPWD/$IPA" Payload)
+          echo "embedded: $(unzip -l "$IPA" | grep -c libpdfium) 个 libpdfium 条目"
       - name: locate ipa
         run: |
           IPA=$(find src-tauri/gen/apple -name '*.ipa' | head -1)

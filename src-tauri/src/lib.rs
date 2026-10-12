@@ -67,8 +67,7 @@ fn import_book(app: tauri::AppHandle, path: String) -> Result<BookView, String> 
         .map(str::to_ascii_lowercase)
         .ok_or_else(|| format!("无法识别文件类型：{picked}"))?;
     match ext.as_str() {
-        "epub" | "txt" => {}
-        "pdf" => return Err("PDF 阅读将在下一版支持（先导入 EPUB / TXT）".into()),
+        "epub" | "txt" | "pdf" => {}
         other => return Err(format!("暂不支持格式：{other}")),
     }
     let bytes = read_picked(&picked)?;

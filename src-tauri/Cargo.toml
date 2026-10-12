@@ -1,6 +1,6 @@
 [package]
 name = "cadmus"
-version = "0.1.5"
+version = "0.2.0"
 description = "cadmus 阅读器（Tauri 2 壳）"
 authors = ["Neomelt"]
 edition = "2024"
@@ -27,6 +27,7 @@ base64 = "0.22"
 cadmus-core = { path = "../crates/cadmus-core" }
 cadmus-epub = { path = "../crates/cadmus-epub" }
 cadmus-preview = { path = "../crates/cadmus-preview" }
+cadmus-reflow = { path = "../crates/cadmus-reflow" }
 
 # iOS：读取文件选择器带回的沙箱外文件需要开启安全作用域（与官方 fs 插件同款依赖）。
 [target.'cfg(target_os = "ios")'.dependencies]

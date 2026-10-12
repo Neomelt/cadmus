@@ -152,6 +152,7 @@ pub fn read_entry(dir: &Path, id: &str) -> Result<String, String> {
                 entry.cover.as_deref(),
             )
         }
+        "pdf" => read_pdf(dir, &entry),
         _ => {
             // 解析时把正文图片导出到 assets/<id>/，位图块路径即可直接内联。
             let assets = assets_dir(dir, &entry.id);
@@ -175,6 +176,24 @@ pub fn read_entry(dir: &Path, id: &str) -> Result<String, String> {
             )
         }
     }
+}
+
+/// PDF 阅读：重排一次，把渲染结果缓存为 `assets/<id>/index.html`。
+fn read_pdf(dir: &Path, entry: &BookEntry) -> Result<String, String> {
+    let assets = assets_dir(dir, &entry.id);
+    let cached = assets.join("index.html");
+    if let Ok(html) = fs::read_to_string(&cached) {
+        return Ok(html);
+    }
+    let options = cadmus_reflow::ReflowOptions::new(&assets);
+    let cancel = cadmus_core::Cancel::new();
+    let document = cadmus_reflow::reflow(Path::new(&entry.file), &options, &cancel)
+        .map_err(|error| format!("PDF 重排失败：{error}"))?;
+    let html = render_document(&document, Some(entry.title.as_str()), None, None)?;
+    if let Err(error) = fs::write(&cached, &html) {
+        eprintln!("重排缓存写入失败：{error}");
+    }
+    Ok(html)
 }
 
 fn render_document(
@@ -388,6 +407,44 @@ mod tests {
         );
         assert!(html.contains("脚注正文：解释这句话。"), "脚注内容应完整");
         assert!(!html.contains("↩"), "回链箭头应被剔除");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// PDF 重排较慢且依赖本机 pdfium：`cargo test -- --ignored` 手动触发。
+    #[test]
+    #[ignore = "需要 pdfium 动态库且耗时较长"]
+    fn pdf_import_reflow_and_cache() {
+        let dir = temp_dir("pdf");
+        let fixture =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../tests/fixtures/1812.01537.pdf");
+        let Ok(bytes) = fs::read(&fixture) else {
+            eprintln!("跳过：fixture 不存在");
+            return;
+        };
+        let entry = ingest(&dir, &bytes, "pdf", "论文", false, Some("pdf1".into())).unwrap();
+        assert_eq!(entry.title, "论文");
+
+        let html = match read_entry(&dir, &entry.id) {
+            Ok(html) => html,
+            Err(error) if error.contains("pdfium") => {
+                eprintln!("跳过：本机无 pdfium（{error}）");
+                return;
+            }
+            Err(error) => panic!("PDF 阅读失败：{error}"),
+        };
+        assert!(html.contains("<main"), "重排结果应可渲染");
+        assert!(
+            html.contains("robotics") && html.contains("INTRODUCTION"),
+            "重排应提取到正文文本"
+        );
+        assert!(
+            assets_dir(&dir, &entry.id).join("index.html").exists(),
+            "重排结果应缓存为 assets/<id>/index.html"
+        );
+
+        // 缓存命中：二次读取直接返回缓存内容。
+        let cached = read_entry(&dir, &entry.id).unwrap();
+        assert_eq!(html, cached, "二次读取应命中缓存");
         let _ = fs::remove_dir_all(&dir);
     }
 

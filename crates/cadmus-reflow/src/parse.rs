@@ -35,7 +35,7 @@ pub struct RawPage {
 
 /// 绑定 pdfium 动态库。
 ///
-/// 顺序：`CADMUS_PDFIUM_LIB` 环境变量（目录）> `vendor/pdfium/lib` > 系统库。
+/// 顺序：`CADMUS_PDFIUM_LIB` 环境变量（目录）> `vendor/pdfium/lib` > 应用包内（iOS）> 系统库。
 pub fn bind_pdfium() -> Result<Pdfium> {
     let bindings = if let Ok(dir) = std::env::var("CADMUS_PDFIUM_LIB") {
         Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(&dir))
@@ -43,12 +43,27 @@ pub fn bind_pdfium() -> Result<Pdfium> {
         Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(
             "vendor/pdfium/lib",
         ))
+    } else if let Some(path) = bundled_pdfium() {
+        Pdfium::bind_to_library(path)
     } else {
         Pdfium::bind_to_system_library()
     };
     bindings
         .map(Pdfium::new)
         .map_err(|error| Error::Unsupported(format!("pdfium 加载失败：{error}")))
+}
+
+/// iOS：应用包内 `Frameworks/libpdfium.dylib`（构建流水线注入）。
+#[cfg(target_os = "ios")]
+fn bundled_pdfium() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let candidate = exe.parent()?.join("Frameworks").join("libpdfium.dylib");
+    candidate.exists().then_some(candidate)
+}
+
+#[cfg(not(target_os = "ios"))]
+fn bundled_pdfium() -> Option<std::path::PathBuf> {
+    None
 }
 
 /// 提取单页的字形与图像对象。

@@ -164,7 +164,7 @@
             book.builtin ? '内置' : (book.format.toUpperCase() + ' · ' + fmtSize(book.size));
           card.addEventListener('click', function () {
             if (document.body.classList.contains('manage')) return;
-            openBook(book.id);
+            openBook(book.id, book.format);
           });
           card.querySelector('.del').addEventListener('click', async function (event) {
             event.stopPropagation();
@@ -189,12 +189,12 @@
       }
     }
 
-    async function openBook(id) {
+    async function openBook(id, format) {
       current = id;
       reader.classList.add('open');
       back.classList.add('open');
       loading.style.display = 'block';
-      loading.textContent = '正在打开…';
+      loading.textContent = format === 'pdf' ? '正在排版…（首次打开需要重排）' : '正在打开…';
       frame.hidden = true;
       try {
         const html = await invoke('read_book', { id: id });
@@ -262,7 +262,7 @@
         const picked = await invoke('plugin:dialog|open', {
           options: {
             multiple: true,
-            filters: [{ name: '电子书', extensions: ['epub', 'txt'] }]
+            filters: [{ name: '电子书', extensions: ['epub', 'txt', 'pdf'] }]
           }
         });
         if (!picked) return;
