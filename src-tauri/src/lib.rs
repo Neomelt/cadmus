@@ -71,24 +71,65 @@ fn list_books(app: tauri::AppHandle) -> Result<Vec<BookView>, String> {
 #[tauri::command]
 fn import_book(app: tauri::AppHandle, path: String) -> Result<BookView, String> {
     let dir = data_dir(&app)?;
-    let source = PathBuf::from(&path);
-    let ext = source
+    let picked = path;
+    let ext = std::path::Path::new(&picked)
         .extension()
         .and_then(|value| value.to_str())
         .map(str::to_ascii_lowercase)
-        .unwrap_or_default();
+        .ok_or_else(|| format!("无法识别文件类型：{picked}"))?;
     match ext.as_str() {
         "epub" | "txt" => {}
         "pdf" => return Err("PDF 阅读将在下一版支持（先导入 EPUB / TXT）".into()),
         other => return Err(format!("暂不支持格式：{other}")),
     }
-    let bytes = std::fs::read(&source).map_err(|error| format!("无法读取文件：{error}"))?;
-    let fallback = source
+    let bytes = read_picked(&picked)?;
+    let fallback = std::path::Path::new(picked.rsplit('/').next().unwrap_or(&picked))
         .file_stem()
         .map(|stem| stem.to_string_lossy().into_owned())
         .unwrap_or_else(|| "未命名".to_string());
     let entry = library::ingest(&dir, &bytes, &ext, &fallback, false, None)?;
     Ok(to_view(&entry))
+}
+
+/// 读取文件选择器带回的文件。
+///
+/// iOS：选择器返回的通常是 `file://` 形式的沙箱外路径，必须先开启
+/// security-scoped 访问权限才能读（与官方 fs 插件一致的官方做法）。
+#[cfg(target_os = "ios")]
+fn read_picked(picked: &str) -> Result<Vec<u8>, String> {
+    use objc2_foundation::{NSString, NSURL};
+
+    if !picked.starts_with("file:") {
+        // 沙箱内纯路径，直接读。
+        return std::fs::read(picked).map_err(|error| format!("无法读取文件（{picked}）：{error}"));
+    }
+
+    let ns_url = NSURL::URLWithString(&NSString::from_str(picked));
+    if let Some(url) = &ns_url {
+        unsafe {
+            url.startAccessingSecurityScopedResource();
+        }
+    }
+
+    let path = url::Url::parse(picked)
+        .ok()
+        .and_then(|parsed| parsed.to_file_path().ok())
+        .ok_or_else(|| format!("无法解析文件 URL：{picked}"))?;
+    let result = std::fs::read(&path)
+        .map_err(|error| format!("无法读取文件（{}）：{error}", path.display()));
+
+    if let Some(url) = &ns_url {
+        unsafe {
+            url.stopAccessingSecurityScopedResource();
+        }
+    }
+    result
+}
+
+#[cfg(not(target_os = "ios"))]
+fn read_picked(picked: &str) -> Result<Vec<u8>, String> {
+    let path = picked.strip_prefix("file://").unwrap_or(picked);
+    std::fs::read(path).map_err(|error| format!("无法读取文件（{path}）：{error}"))
 }
 
 #[tauri::command]

@@ -23,6 +23,7 @@
 - app：引擎接入（内置示例书可读：EPUB → 块序列 → 阅读 HTML；主题/字号/行宽/目录）；App 图标/设备族修正（iPad 专用）；官方阅读渲染器抽为 cadmus-preview crate
 - app v0.1.2：书库（导入 EPUB/TXT、删除、阅读进度记忆）；阅读设置面板升级（字号/行距/行宽滑条，字体 宋/黑/楷，主题 白/米黄/护眼/深灰/纯黑）
 - ios：IPA 产物带版本号（cadmus-<version>-unsigned.ipa）；workflow 摘要标注版本
+- app v0.1.3：修复导入失败（iOS 沙箱外文件需开启 security-scoped 访问）与阅读进度不更新（一屏读完记 100%、滚动位置多来源兼容）；真书实测通过（《浮士德》9.6MB：元数据/封面/阅读/进度/设置面板）
 - CI：产出 cadmus-cli Linux 发布产物（Actions artifact）
 
 ### 变更

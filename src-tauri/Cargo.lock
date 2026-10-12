@@ -396,12 +396,14 @@ dependencies = [
  "cadmus-core",
  "cadmus-epub",
  "cadmus-preview",
+ "objc2-foundation",
  "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "url",
 ]
 
 [[package]]
