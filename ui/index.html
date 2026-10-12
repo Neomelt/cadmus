@@ -736,6 +736,19 @@
         } catch (error) {
           showToast('加书签失败：' + error);
         }
+      } else if (data.type === 'cadmus:annotationResized') {
+        try {
+          await invoke('resize_annotation', {
+            id: current,
+            annId: data.id,
+            start: data.start,
+            end: data.end,
+            text: data.text
+          });
+          refreshAnnotations();
+        } catch (error) {
+          showToast('调整失败：' + error);
+        }
       } else if (data.type === 'cadmus:annotationDeleted') {
         try {
           await invoke('delete_annotation', { id: current, annId: data.id });

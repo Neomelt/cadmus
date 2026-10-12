@@ -153,6 +153,12 @@ mark.hl.has-note::after { content: "✎"; font-size: .68em; vertical-align: supe
 #ann-bar .dot.green { background: rgba(126,217,87,.8); }
 #ann-bar .dot.blue { background: rgba(94,168,255,.8); }
 #ann-bar .dot.pink { background: rgba(255,143,195,.8); }
+.hl-handle {
+  position: fixed; z-index: 47; display: none;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: var(--fg); border: 2px solid var(--bg);
+  transform: translate(-50%, -50%); touch-action: none;
+}
 #ann-note {
   position: fixed; z-index: 46; display: none; width: min(88vw, 22rem);
   background: var(--bg); border: 1px solid var(--soft); border-radius: 12px;
@@ -355,7 +361,7 @@ const SCRIPT: &str = r#"<script>
   var COLORS = ['yellow', 'green', 'blue', 'pink'];
 
   function parentPost(message) { try { window.parent.postMessage(message, '*'); } catch (e) {} }
-  function hideAnnBar() { annBar.classList.remove('open'); pendingRange = null; activeAnnId = null; }
+  function hideAnnBar() { annBar.classList.remove('open'); pendingRange = null; activeAnnId = null; hideHandles(); }
 
   function blockOf(node) {
     var el = node && node.nodeType === 3 ? node.parentElement : node;
@@ -457,6 +463,160 @@ const SCRIPT: &str = r#"<script>
       hideAnnBar();
     });
     annBar.appendChild(delBtn);
+    showHandles(document.querySelector('mark[data-ann="' + activeAnnId + '"]'));
+  }
+
+  var handleStart = null;
+  var handleEnd = null;
+  var handleDrag = null;
+
+  function ensureHandles() {
+    if (handleStart) return;
+    handleStart = document.createElement('div');
+    handleEnd = document.createElement('div');
+    handleStart.className = 'hl-handle';
+    handleEnd.className = 'hl-handle';
+    handleStart.addEventListener('pointerdown', function (event) { beginHandleDrag(event, 'start'); });
+    handleEnd.addEventListener('pointerdown', function (event) { beginHandleDrag(event, 'end'); });
+    document.body.appendChild(handleStart);
+    document.body.appendChild(handleEnd);
+  }
+  function showHandles(mark) {
+    if (!mark) return;
+    ensureHandles();
+    var rect = mark.getBoundingClientRect();
+    handleStart.style.display = 'block';
+    handleEnd.style.display = 'block';
+    handleStart.style.left = rect.left + 'px';
+    handleStart.style.top = (rect.top + rect.height / 2) + 'px';
+    handleEnd.style.left = rect.right + 'px';
+    handleEnd.style.top = (rect.top + rect.height / 2) + 'px';
+  }
+  function hideHandles() {
+    if (!handleStart) return;
+    handleStart.style.display = 'none';
+    handleEnd.style.display = 'none';
+  }
+  function utf16OffsetFor(str, codePoints) {
+    var chars = Array.from(str);
+    var count = 0;
+    var index = 0;
+    while (count < codePoints && count < chars.length) {
+      index += chars[count].length;
+      count++;
+    }
+    return index;
+  }
+  function offsetOfRangePoint(block, container, offset) {
+    var pre = document.createRange();
+    pre.selectNodeContents(block);
+    try { pre.setEnd(container, offset); } catch (e) { return null; }
+    return codePointLength(pre.toString());
+  }
+  function rangeForOffsets(block, start, end) {
+    var walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, null);
+    var count = 0;
+    var startNode = null;
+    var startOffset = 0;
+    var endNode = null;
+    var endOffset = 0;
+    var node;
+    while ((node = walker.nextNode())) {
+      var len = Array.from(node.nodeValue).length;
+      if (startNode === null && count + len >= start) {
+        startNode = node;
+        startOffset = utf16OffsetFor(node.nodeValue, start - count);
+      }
+      if (count + len >= end) {
+        endNode = node;
+        endOffset = utf16OffsetFor(node.nodeValue, end - count);
+        break;
+      }
+      count += len;
+    }
+    if (!startNode || !endNode) return null;
+    var range = document.createRange();
+    try {
+      range.setStart(startNode, startOffset);
+      range.setEnd(endNode, endOffset);
+    } catch (e) { return null; }
+    return range;
+  }
+  function offsetForPoint(x, y, block) {
+    var range = null;
+    if (document.caretRangeFromPoint) {
+      range = document.caretRangeFromPoint(x, y);
+    } else if (document.caretPositionFromPoint) {
+      var pos = document.caretPositionFromPoint(x, y);
+      if (pos) {
+        range = document.createRange();
+        range.setStart(pos.offsetNode, pos.offset);
+      }
+    }
+    if (!range || !block.contains(range.startContainer)) return null;
+    return offsetOfRangePoint(block, range.startContainer, range.startOffset);
+  }
+  function beginHandleDrag(event, side) {
+    event.preventDefault();
+    event.stopPropagation();
+    var mark = document.querySelector('mark[data-ann="' + activeAnnId + '"]');
+    if (!mark) return;
+    var block = blockOf(mark);
+    if (!block) return;
+    var oldStart = offsetOfRangePoint(block, mark, 0);
+    var oldEnd = offsetOfRangePoint(block, mark, mark.childNodes.length);
+    if (oldStart === null || oldEnd === null) return;
+    handleDrag = { side: side, mark: mark, block: block, oldStart: oldStart, oldEnd: oldEnd, current: null };
+    document.addEventListener('pointermove', onHandleMove);
+    document.addEventListener('pointerup', onHandleEnd);
+  }
+  function onHandleMove(event) {
+    if (!handleDrag) return;
+    event.preventDefault();
+    var offset = offsetForPoint(event.clientX, event.clientY, handleDrag.block);
+    if (offset === null) return;
+    if (handleDrag.side === 'start') {
+      var newStart = Math.max(0, Math.min(offset, handleDrag.oldEnd - 1));
+      handleDrag.current = { start: newStart, end: handleDrag.oldEnd };
+      handleStart.style.left = event.clientX + 'px';
+      handleStart.style.top = event.clientY + 'px';
+    } else {
+      var newEnd = Math.max(offset, handleDrag.oldStart + 1);
+      handleDrag.current = { start: handleDrag.oldStart, end: newEnd };
+      handleEnd.style.left = event.clientX + 'px';
+      handleEnd.style.top = event.clientY + 'px';
+    }
+  }
+  function onHandleEnd() {
+    document.removeEventListener('pointermove', onHandleMove);
+    document.removeEventListener('pointerup', onHandleEnd);
+    var drag = handleDrag;
+    handleDrag = null;
+    hideHandles();
+    if (!drag || !drag.current) return;
+    var annId = drag.mark.dataset.ann;
+    var start = drag.current.start;
+    var end = drag.current.end;
+    if (start === drag.oldStart && end === drag.oldEnd) return;
+    var colorMatch = /hl-(\w+)/.exec(drag.mark.className);
+    var color = colorMatch ? colorMatch[1] : 'yellow';
+    var note = drag.mark.dataset.note || '';
+    var holder = drag.mark.parentNode;
+    while (drag.mark.firstChild) holder.insertBefore(drag.mark.firstChild, drag.mark);
+    holder.removeChild(drag.mark);
+    holder.normalize();
+    var range = rangeForOffsets(drag.block, start, end);
+    if (!range) return;
+    var fresh = document.createElement('mark');
+    fresh.className = 'hl hl-' + color + (note ? ' has-note' : '');
+    fresh.dataset.ann = annId;
+    if (note) fresh.dataset.note = note;
+    try {
+      fresh.appendChild(range.extractContents());
+      range.insertNode(fresh);
+    } catch (e) { return; }
+    parentPost({ type: 'cadmus:annotationResized', id: annId, start: start, end: end, text: fresh.textContent });
+    hideAnnBar();
   }
 
   var selTimer = null;
@@ -987,6 +1147,7 @@ mod tests {
         assert!(html.contains("updateTocCurrent"), "缺目录当前章同步逻辑");
         assert!(html.contains("s-para"), "缺段距滑条");
         assert!(html.contains("s-indent"), "缺首行缩进滑条");
+        assert!(html.contains("hl-handle"), "缺高亮调整手柄");
     }
 
     #[test]
