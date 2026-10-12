@@ -49,3 +49,15 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sample_book_renders() {
+        let book = super::read_sample_book().expect("渲染示例书");
+        assert!(book.title.contains("山径夜行"), "title: {}", book.title);
+        assert!(book.html.contains("第一章"), "html 缺第一章");
+        assert!(book.html.contains("cadmus 示例书"), "html 缺作者");
+        assert!(book.html.contains("toc-btn"), "html 缺阅读工具栏");
+    }
+}
