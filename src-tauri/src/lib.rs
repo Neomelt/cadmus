@@ -207,6 +207,19 @@ fn delete_annotation(app: tauri::AppHandle, id: String, ann_id: String) -> Resul
 }
 
 #[tauri::command]
+fn resize_annotation(
+    app: tauri::AppHandle,
+    id: String,
+    ann_id: String,
+    start: u32,
+    end: u32,
+    text: String,
+) -> Result<annotations::Annotation, String> {
+    let dir = data_dir(&app)?;
+    annotations::resize(&dir, &id, &ann_id, start, end, &text)
+}
+
+#[tauri::command]
 fn add_bookmark(
     app: tauri::AppHandle,
     id: String,
@@ -265,6 +278,7 @@ pub fn run() {
             add_annotation,
             update_annotation,
             delete_annotation,
+            resize_annotation,
             add_bookmark,
             delete_bookmark,
             export_markdown,

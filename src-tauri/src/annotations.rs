@@ -152,6 +152,30 @@ pub fn delete(dir: &Path, book_id: &str, ann_id: &str) -> Result<(), String> {
     save(dir, book_id, &store)
 }
 
+/// 调整高亮区间（拖动边界）：更新起止与摘录，其余字段保留。
+pub fn resize(
+    dir: &Path,
+    book_id: &str,
+    ann_id: &str,
+    start: u32,
+    end: u32,
+    text: &str,
+) -> Result<Annotation, String> {
+    if end <= start {
+        return Err("高亮区间无效".into());
+    }
+    let mut store = load(dir, book_id);
+    let Some(annotation) = store.annotations.iter_mut().find(|item| item.id == ann_id) else {
+        return Err(format!("未找到批注：{ann_id}"));
+    };
+    annotation.start = start;
+    annotation.end = end;
+    annotation.text = text.chars().take(EXCERPT_MAX).collect();
+    let updated = annotation.clone();
+    save(dir, book_id, &store)?;
+    Ok(updated)
+}
+
 /// 新增书签（同一块重复添加时返回既有条目）。
 pub fn add_bookmark(
     dir: &Path,
@@ -262,6 +286,20 @@ mod tests {
         assert!(add(&dir, "b", "1", 9, 3, "x", "yellow").is_err());
         let annotation = add(&dir, "b", "1", 0, 3, "abc", "rainbow").unwrap();
         assert_eq!(annotation.color, "yellow", "未知颜色回退黄");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resize_updates_range_and_excerpt() {
+        let dir = temp_dir("resize");
+        let ann = add(&dir, "b", "42", 2, 5, "中间片", "yellow").unwrap();
+        let resized = resize(&dir, "b", &ann.id, 1, 7, "开中间片结").unwrap();
+        assert_eq!(resized.start, 1);
+        assert_eq!(resized.end, 7);
+        assert_eq!(resized.text, "开中间片结");
+        assert_eq!(resized.id, ann.id, "id 不变（颜色/笔记保留）");
+        assert!(resize(&dir, "b", &ann.id, 5, 5, "x").is_err());
+        assert!(resize(&dir, "b", "missing", 0, 1, "x").is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 
