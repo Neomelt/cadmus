@@ -15,6 +15,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
+use crate::annotations;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BookEntry {
     pub id: String,
@@ -75,7 +77,7 @@ fn heal_stored(dir: &Path, stored: &str) -> Option<String> {
     None
 }
 
-fn now() -> u64 {
+pub(crate) fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -200,6 +202,7 @@ pub fn read_entry(dir: &Path, id: &str) -> Result<String, String> {
         .cover
         .as_deref()
         .map(|cover| resolve_stored(dir, cover).display().to_string());
+    let marks = annotations::marks(dir, &entry.id);
 
     match entry.format.as_str() {
         "txt" => {
@@ -208,12 +211,15 @@ pub fn read_entry(dir: &Path, id: &str) -> Result<String, String> {
                     .map_err(|error| error.to_string())?;
             render_document(
                 &document,
-                Some(entry.title.as_str()),
-                entry.author.as_deref(),
-                cover_path.as_deref(),
+                &RenderMeta {
+                    title: Some(entry.title.as_str()),
+                    author: entry.author.as_deref(),
+                    cover: cover_path.as_deref(),
+                    marks: &marks,
+                },
             )
         }
-        "pdf" => read_pdf(dir, &entry),
+        "pdf" => read_pdf(dir, &entry, &marks),
         _ => {
             // 解析时把正文图片导出到 assets/<id>/，位图块路径即可直接内联。
             let assets = assets_dir(dir, &entry.id);
@@ -226,53 +232,89 @@ pub fn read_entry(dir: &Path, id: &str) -> Result<String, String> {
             .map_err(|error| error.to_string())?;
             render_document(
                 &document,
-                document.title.as_deref().or(Some(entry.title.as_str())),
-                report
-                    .creators
-                    .first()
-                    .map(String::as_str)
-                    .or(entry.author.as_deref()),
-                // 旧数据封面可能存在别处，索引里的路径优先（已解析为当前容器路径）。
-                cover_path.as_deref().or(report.cover_path.as_deref()),
+                &RenderMeta {
+                    title: document.title.as_deref().or(Some(entry.title.as_str())),
+                    author: report
+                        .creators
+                        .first()
+                        .map(String::as_str)
+                        .or(entry.author.as_deref()),
+                    // 旧数据封面可能存在别处，索引里的路径优先（已解析为当前容器路径）。
+                    cover: cover_path.as_deref().or(report.cover_path.as_deref()),
+                    marks: &marks,
+                },
             )
         }
     }
 }
 
-/// PDF 重排缓存文件名：重排算法升级时递增，旧缓存自动失效。
-const REFLOW_CACHE_FILE: &str = "reflow-v1.html";
+/// PDF 重排文档缓存文件名：重排算法升级时递增，旧缓存自动失效。
+const REFLOW_DOC_CACHE: &str = "reflow-doc-v1.json";
 
-/// PDF 阅读：重排一次，把渲染结果缓存到 `assets/<id>/`。
-fn read_pdf(dir: &Path, entry: &BookEntry) -> Result<String, String> {
+/// PDF 阅读：重排一次，把文档（块序列）缓存到 `assets/<id>/`，每次渲染注入批注。
+fn read_pdf(
+    dir: &Path,
+    entry: &BookEntry,
+    marks: &[cadmus_preview::Mark],
+) -> Result<String, String> {
     let assets = assets_dir(dir, &entry.id);
-    let cached = assets.join(REFLOW_CACHE_FILE);
-    if let Ok(html) = fs::read_to_string(&cached) {
-        return Ok(html);
-    }
-    let options = cadmus_reflow::ReflowOptions::new(&assets);
-    let cancel = cadmus_core::Cancel::new();
-    let document = cadmus_reflow::reflow(&resolve_stored(dir, &entry.file), &options, &cancel)
-        .map_err(|error| format!("PDF 重排失败：{error}"))?;
-    let html = render_document(&document, Some(entry.title.as_str()), None, None)?;
-    if let Err(error) = fs::write(&cached, &html) {
-        eprintln!("重排缓存写入失败：{error}");
-    }
-    Ok(html)
+    let cached = assets.join(REFLOW_DOC_CACHE);
+    let document = if let Ok(raw) = fs::read_to_string(&cached) {
+        // 缓存命中：位图路径可能因容器搬迁失效，按文件名在资产目录内重建。
+        let mut document: cadmus_core::Document =
+            serde_json::from_str(&raw).map_err(|error| format!("重排缓存损坏：{error}"))?;
+        for block in &mut document.blocks {
+            if let cadmus_core::Payload::Bitmap(bitmap) = &mut block.payload
+                && !Path::new(&bitmap.path).exists()
+                && let Some(name) = Path::new(&bitmap.path).file_name()
+            {
+                bitmap.path = assets.join(name).display().to_string();
+            }
+        }
+        document
+    } else {
+        let options = cadmus_reflow::ReflowOptions::new(&assets);
+        let cancel = cadmus_core::Cancel::new();
+        let document = cadmus_reflow::reflow(&resolve_stored(dir, &entry.file), &options, &cancel)
+            .map_err(|error| format!("PDF 重排失败：{error}"))?;
+        if let Ok(json) = serde_json::to_string(&document)
+            && let Err(error) = fs::write(&cached, json)
+        {
+            eprintln!("重排缓存写入失败：{error}");
+        }
+        document
+    };
+    render_document(
+        &document,
+        &RenderMeta {
+            title: Some(entry.title.as_str()),
+            author: None,
+            cover: None,
+            marks,
+        },
+    )
+}
+
+/// 渲染参数（标题/作者/封面/批注标记）。
+struct RenderMeta<'a> {
+    title: Option<&'a str>,
+    author: Option<&'a str>,
+    cover: Option<&'a str>,
+    marks: &'a [cadmus_preview::Mark],
 }
 
 fn render_document(
     document: &cadmus_core::Document,
-    title: Option<&str>,
-    author: Option<&str>,
-    cover: Option<&str>,
+    meta: &RenderMeta<'_>,
 ) -> Result<String, String> {
-    let meta = cadmus_preview::PreviewMeta {
-        title: title.unwrap_or("未命名"),
-        byline: author,
-        cover,
+    let preview = cadmus_preview::PreviewMeta {
+        title: meta.title.unwrap_or("未命名"),
+        byline: meta.author,
+        cover: meta.cover,
         asset_src: Some(&asset_data_url),
+        marks: meta.marks,
     };
-    cadmus_preview::render_to_string(document, Path::new(""), &meta)
+    cadmus_preview::render_to_string(document, Path::new(""), &preview)
         .map_err(|error| error.to_string())
 }
 
@@ -503,7 +545,7 @@ mod tests {
             "重排应提取到正文文本"
         );
         assert!(
-            assets_dir(&dir, &entry.id).join(REFLOW_CACHE_FILE).exists(),
+            assets_dir(&dir, &entry.id).join(REFLOW_DOC_CACHE).exists(),
             "重排结果应缓存到 assets/<id>/"
         );
 

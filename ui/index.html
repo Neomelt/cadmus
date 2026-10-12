@@ -64,6 +64,44 @@
     background: Canvas; color: CanvasText; font: inherit; font-size: .85rem; cursor: pointer;
   }
   #back.open { display: inline-flex; }
+  #btn-ann {
+    position: fixed; z-index: 10;
+    top: max(.6rem, env(safe-area-inset-top)); right: max(.6rem, env(safe-area-inset-right));
+    display: none; padding: .45rem .85rem; border-radius: 999px;
+    border: 1px solid rgba(127, 127, 127, .35);
+    background: Canvas; color: CanvasText; font: inherit; font-size: .85rem; cursor: pointer;
+  }
+  #btn-ann.open { display: inline-flex; }
+  #ann-panel {
+    position: fixed; z-index: 20; top: 0; bottom: 0; right: 0;
+    width: min(92vw, 24rem); overflow: auto;
+    background: Canvas; border-left: 1px solid rgba(127, 127, 127, .28);
+    padding: max(1rem, env(safe-area-inset-top)) 1rem max(2rem, env(safe-area-inset-bottom));
+    transform: translateX(102%); transition: transform .2s ease;
+  }
+  #ann-panel.open { transform: none; }
+  #ann-panel h3 { margin: 0 0 .8rem; font-size: .95rem; }
+  .ann-filter { display: flex; gap: .4rem; margin-bottom: .8rem; flex-wrap: wrap; }
+  .ann-filter button {
+    font: inherit; font-size: .78rem; padding: .25rem .6rem; border-radius: 999px;
+    border: 1px solid rgba(127, 127, 127, .35); background: transparent; color: CanvasText; cursor: pointer;
+  }
+  .ann-filter button.on { background: CanvasText; color: Canvas; border-color: transparent; }
+  .ann-item { display: flex; gap: .6rem; padding: .7rem .2rem; border-bottom: 1px solid rgba(127, 127, 127, .18); }
+  .ann-item .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: .35rem; flex: none; }
+  .ann-item .dot.yellow { background: #f2c94c; }
+  .ann-item .dot.green { background: #7ed957; }
+  .ann-item .dot.blue { background: #5ea8ff; }
+  .ann-item .dot.pink { background: #ff8fc3; }
+  .ann-item .body { flex: 1; min-width: 0; cursor: pointer; }
+  .ann-item .quote { margin: 0 0 .3rem; font-size: .88rem; line-height: 1.5; }
+  .ann-item .note { margin: 0 0 .3rem; font-size: .82rem; opacity: .75; }
+  .ann-item .when { font-size: .72rem; opacity: .45; }
+  .ann-item .rm {
+    flex: none; align-self: flex-start; font: inherit; font-size: .78rem;
+    color: #d9534f; background: transparent; border: 0; cursor: pointer; padding: .15rem .3rem;
+  }
+  .ann-empty { font-size: .85rem; opacity: .5; padding: 1rem 0; }
   .loading { padding: 3rem 1rem; text-align: center; opacity: .5; }
   #toast {
     position: fixed; z-index: 50; left: 50%; bottom: max(1.2rem, env(safe-area-inset-bottom));
@@ -90,7 +128,7 @@
   <p class="section-title">书库</p>
   <div class="books" id="books"></div>
   <p class="hint">
-    支持导入 EPUB / TXT（PDF 阅读将在下一版支持）。<br>
+    支持导入 EPUB / TXT / PDF。导入后在书库点开阅读；导出标注到 Markdown 在「标注」面板。<br>
     阅读设置（字号 / 行距 / 行宽 / 字体 / 主题）在阅读页的「Aa 设置」里。
   </p>
 </main>
@@ -100,6 +138,12 @@
   <iframe id="frame" title="reader" hidden></iframe>
 </div>
 <button id="back">‹ 书库</button>
+<button id="btn-ann">标注</button>
+<aside id="ann-panel">
+  <h3>标注</h3>
+  <div class="ann-filter" id="ann-filter"></div>
+  <div id="ann-list"></div>
+</aside>
 <div id="toast"></div>
 
 <script>
@@ -193,6 +237,7 @@
       current = id;
       reader.classList.add('open');
       back.classList.add('open');
+      btnAnn.classList.add('open');
       loading.style.display = 'block';
       loading.textContent = format === 'pdf' ? '正在排版…（首次打开需要重排）' : '正在打开…';
       frame.hidden = true;
@@ -202,6 +247,7 @@
           loading.style.display = 'none';
           frame.hidden = false;
           restoreProgress();
+          refreshAnnotations();
           saveTimer = setInterval(saveProgress, 5000);
         };
         frame.srcdoc = html;
@@ -247,6 +293,9 @@
       current = null;
       reader.classList.remove('open');
       back.classList.remove('open');
+      btnAnn.classList.remove('open');
+      toggleAnnPanel(false);
+      annotations = [];
       frame.srcdoc = '';
       setTimeout(refresh, 250);
     }
@@ -282,6 +331,152 @@
         refresh();
       } catch (error) {
         showToast('打开文件选择器失败：' + error);
+      }
+    });
+
+    // ---- 标注面板与消息桥 ----
+    const annPanel = document.getElementById('ann-panel');
+    const annList = document.getElementById('ann-list');
+    const annFilter = document.getElementById('ann-filter');
+    const btnAnn = document.getElementById('btn-ann');
+    let annotations = [];
+    let annColorFilter = 'all';
+    let annPanelOpen = false;
+
+    function fmtTime(ts) {
+      try {
+        const d = new Date(ts * 1000);
+        const pad = function (n) { return String(n).padStart(2, '0'); };
+        return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+      } catch (error) { return ''; }
+    }
+
+    function renderAnnList() {
+      const filters = [['all', '全部'], ['yellow', '黄'], ['green', '绿'], ['blue', '蓝'], ['pink', '粉']];
+      annFilter.innerHTML = '';
+      filters.forEach(function (pair) {
+        const b = document.createElement('button');
+        b.textContent = pair[1];
+        if (annColorFilter === pair[0]) b.classList.add('on');
+        b.addEventListener('click', function () { annColorFilter = pair[0]; renderAnnList(); });
+        annFilter.appendChild(b);
+      });
+      const items = annotations.filter(function (item) {
+        return annColorFilter === 'all' || item.color === annColorFilter;
+      });
+      annList.innerHTML = '';
+      if (items.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'ann-empty';
+        empty.textContent = '还没有标注。在正文里选中文字即可高亮。';
+        annList.appendChild(empty);
+        return;
+      }
+      items.slice().sort(function (a, b) { return b.created_at - a.created_at; }).forEach(function (item) {
+        const row = document.createElement('div');
+        row.className = 'ann-item';
+        const dot = document.createElement('span');
+        dot.className = 'dot ' + item.color;
+        row.appendChild(dot);
+        const body = document.createElement('div');
+        body.className = 'body';
+        const quote = document.createElement('p');
+        quote.className = 'quote';
+        quote.textContent = '「' + item.text + '」';
+        body.appendChild(quote);
+        if (item.note) {
+          const note = document.createElement('p');
+          note.className = 'note';
+          note.textContent = '✎ ' + item.note;
+          body.appendChild(note);
+        }
+        const when = document.createElement('span');
+        when.className = 'when';
+        when.textContent = fmtTime(item.created_at);
+        body.appendChild(when);
+        body.addEventListener('click', function () {
+          try {
+            frame.contentWindow.postMessage({ type: 'cadmus:jump', annId: item.id }, '*');
+          } catch (error) {}
+          toggleAnnPanel(false);
+        });
+        row.appendChild(body);
+        const rm = document.createElement('button');
+        rm.className = 'rm';
+        rm.textContent = '删除';
+        rm.addEventListener('click', async function () {
+          try {
+            await invoke('delete_annotation', { id: current, annId: item.id });
+            annotations = annotations.filter(function (x) { return x.id !== item.id; });
+            renderAnnList();
+            try {
+              frame.contentWindow.postMessage({ type: 'cadmus:removeMark', id: item.id }, '*');
+            } catch (error) {}
+          } catch (error) {
+            showToast('删除失败：' + error);
+          }
+        });
+        row.appendChild(rm);
+        annList.appendChild(row);
+      });
+    }
+
+    async function refreshAnnotations() {
+      if (!current) return;
+      try {
+        const store = await invoke('list_annotations', { id: current });
+        annotations = (store && store.annotations) || [];
+        renderAnnList();
+      } catch (error) {}
+    }
+
+    function toggleAnnPanel(open) {
+      annPanelOpen = open === undefined ? !annPanelOpen : open;
+      annPanel.classList.toggle('open', annPanelOpen);
+    }
+
+    btnAnn.addEventListener('click', function () {
+      toggleAnnPanel();
+      if (annPanelOpen) refreshAnnotations();
+    });
+
+    window.addEventListener('message', async function (event) {
+      if (!frame.contentWindow || event.source !== frame.contentWindow) return;
+      const data = event.data || {};
+      if (data.type === 'cadmus:addAnnotation') {
+        try {
+          const ann = await invoke('add_annotation', {
+            id: current,
+            blockId: data.blockId,
+            start: data.start,
+            end: data.end,
+            text: data.text,
+            color: data.color
+          });
+          frame.contentWindow.postMessage({ type: 'cadmus:annotationSaved', id: ann.id, color: ann.color }, '*');
+          refreshAnnotations();
+        } catch (error) {
+          showToast('高亮失败：' + error);
+        }
+      } else if (data.type === 'cadmus:annotationUpdated') {
+        try {
+          await invoke('update_annotation', {
+            id: current,
+            annId: data.id,
+            color: data.color === undefined ? null : data.color,
+            note: data.note === undefined ? null : data.note
+          });
+          refreshAnnotations();
+        } catch (error) {
+          showToast('保存失败：' + error);
+        }
+      } else if (data.type === 'cadmus:annotationDeleted') {
+        try {
+          await invoke('delete_annotation', { id: current, annId: data.id });
+          refreshAnnotations();
+        } catch (error) {
+          showToast('删除失败：' + error);
+        }
       }
     });
 

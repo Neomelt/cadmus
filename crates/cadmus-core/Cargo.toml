@@ -6,3 +6,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# 文档模型可序列化（PDF 重排缓存、后续同步/导出需要）。
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

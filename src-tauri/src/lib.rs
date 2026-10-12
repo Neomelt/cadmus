@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 use tauri::Manager;
 
+mod annotations;
 mod library;
 
 #[derive(Serialize)]
@@ -142,6 +143,47 @@ fn save_progress(app: tauri::AppHandle, id: String, progress: f32) -> Result<(),
     library::set_progress(&dir, &id, progress)
 }
 
+#[tauri::command]
+fn list_annotations(
+    app: tauri::AppHandle,
+    id: String,
+) -> Result<annotations::AnnotationStore, String> {
+    let dir = data_dir(&app)?;
+    Ok(annotations::load(&dir, &id))
+}
+
+#[tauri::command]
+fn add_annotation(
+    app: tauri::AppHandle,
+    id: String,
+    block_id: String,
+    start: u32,
+    end: u32,
+    text: String,
+    color: String,
+) -> Result<annotations::Annotation, String> {
+    let dir = data_dir(&app)?;
+    annotations::add(&dir, &id, &block_id, start, end, &text, &color)
+}
+
+#[tauri::command]
+fn update_annotation(
+    app: tauri::AppHandle,
+    id: String,
+    ann_id: String,
+    color: Option<String>,
+    note: Option<String>,
+) -> Result<annotations::Annotation, String> {
+    let dir = data_dir(&app)?;
+    annotations::update(&dir, &id, &ann_id, color.as_deref(), note.as_deref())
+}
+
+#[tauri::command]
+fn delete_annotation(app: tauri::AppHandle, id: String, ann_id: String) -> Result<(), String> {
+    let dir = data_dir(&app)?;
+    annotations::delete(&dir, &id, &ann_id)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -152,7 +194,11 @@ pub fn run() {
             import_book,
             read_book,
             delete_book,
-            save_progress
+            save_progress,
+            list_annotations,
+            add_annotation,
+            update_annotation,
+            delete_annotation
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

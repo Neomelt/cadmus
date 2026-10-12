@@ -1,5 +1,7 @@
 //! 文档块模型（DESIGN-ENGINE §2.2）。
 
+use serde::{Deserialize, Serialize};
+
 use crate::anchor::BlockId;
 
 /// 原页范围（含端点）。仅 PDF 使用；EPUB/TXT 为 `None`。
@@ -8,7 +10,7 @@ pub type PageRange = (u32, u32);
 /// 块类型。
 ///
 /// 非文本块（图/表/公式/代码/降级页）始终作为不可分割的原子参与阅读流。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlockKind {
     /// 标题；`level` 为层级（1 起）。
     Heading {
@@ -25,7 +27,7 @@ pub enum BlockKind {
 }
 
 /// 位图引用（原子块或降级页）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BitmapRef {
     /// 位图文件路径（导出目录或缓存内）。
     pub path: String,
@@ -34,7 +36,7 @@ pub struct BitmapRef {
 }
 
 /// 块内容。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Payload {
     /// 语义文本（段落/标题等），后续由 WebView 排版。
     Text(String),
@@ -43,7 +45,7 @@ pub enum Payload {
 }
 
 /// 阅读流中的一个块。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Block {
     /// 稳定标识，由 [`crate::stable_block_id`] 派生。
     pub id: BlockId,
@@ -95,7 +97,7 @@ impl Block {
 }
 
 /// 一个文档的完整块序列。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Document {
     /// 源文件内容哈希（[`crate::content_hash`]）。
     pub doc_hash: u64,
@@ -124,5 +126,30 @@ mod tests {
         let block = Block::bitmap(9, BlockKind::Figure, 1, bitmap.clone());
         assert_eq!(block.as_text(), None);
         assert_eq!(block.payload, Payload::Bitmap(bitmap));
+    }
+
+    #[test]
+    fn document_roundtrips_through_json() {
+        let document = Document {
+            doc_hash: 0xabc,
+            title: Some("缓存测试".into()),
+            blocks: vec![
+                Block::text(1, BlockKind::Heading { level: 1 }, 0, "第一章"),
+                Block::bitmap(
+                    2,
+                    BlockKind::Formula,
+                    1,
+                    BitmapRef {
+                        path: "/tmp/assets/p1-f1.png".into(),
+                        width_px: 640,
+                        height_px: 120,
+                    },
+                )
+                .with_page_range((1, 1)),
+            ],
+        };
+        let json = serde_json::to_string(&document).unwrap();
+        let restored: Document = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored, document);
     }
 }

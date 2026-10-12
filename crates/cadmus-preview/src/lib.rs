@@ -8,6 +8,21 @@ use std::path::{Path, PathBuf};
 
 use cadmus_core::{Block, BlockKind, Document, Payload, Result};
 
+/// 批注标记：某块内的字符区间（半开区间，按字符计）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mark {
+    /// 目标块的稳定 id（十进制字符串，避免 JS 大整数精度问题）。
+    pub block_id: String,
+    pub start: u32,
+    pub end: u32,
+    /// 批注 id（`<mark data-ann>`）。
+    pub id: String,
+    /// 颜色名（yellow/green/blue/pink）。
+    pub color: String,
+    /// 附着笔记（显示小标记并供编辑预填）。
+    pub note: Option<String>,
+}
+
 /// 预览元信息。
 pub struct PreviewMeta<'a> {
     pub title: &'a str,
@@ -17,6 +32,8 @@ pub struct PreviewMeta<'a> {
     pub cover: Option<&'a str>,
     /// 位图/封面路径 → 可用的 src（如 data URL）；`None` 时使用相对 `base` 的路径。
     pub asset_src: Option<&'a dyn Fn(&str) -> String>,
+    /// 批注标记（按块内字符区间渲染高亮）。
+    pub marks: &'a [Mark],
 }
 
 const HEAD: &str = r#"<!doctype html>
@@ -97,6 +114,46 @@ footer { margin-top: 3rem; color: var(--muted); font-size: .8em; text-align: cen
 .chips button.on { border-color: var(--fg); background: var(--soft); }
 #scrim { position: fixed; inset: 0; z-index: 35; background: rgba(0,0,0,.35); display: none; }
 #scrim.open { display: block; }
+mark.hl { border-radius: 3px; padding: 0 .06em; }
+mark.hl-yellow { background: rgba(255,214,64,.45); }
+mark.hl-green { background: rgba(126,217,87,.40); }
+mark.hl-blue { background: rgba(94,168,255,.40); }
+mark.hl-pink { background: rgba(255,143,195,.42); }
+body[data-theme="night"] mark.hl-yellow, body[data-theme="black"] mark.hl-yellow { background: rgba(255,214,64,.28); }
+body[data-theme="night"] mark.hl-green, body[data-theme="black"] mark.hl-green { background: rgba(126,217,87,.24); }
+body[data-theme="night"] mark.hl-blue, body[data-theme="black"] mark.hl-blue { background: rgba(94,168,255,.26); }
+body[data-theme="night"] mark.hl-pink, body[data-theme="black"] mark.hl-pink { background: rgba(255,143,195,.26); }
+mark.hl.has-note::after { content: "✎"; font-size: .68em; vertical-align: super; margin-left: .15em; color: var(--muted); }
+.flash { animation: cadmus-flash 1.4s ease; }
+@keyframes cadmus-flash { 0% { box-shadow: 0 0 0 3px rgba(255,214,64,.9); } 100% { box-shadow: none; } }
+#ann-bar {
+  position: fixed; z-index: 45; display: none; gap: .35rem; align-items: center;
+  padding: .35rem .45rem; border-radius: 10px;
+  background: var(--bg); border: 1px solid var(--soft);
+  box-shadow: 0 6px 24px rgba(0,0,0,.24);
+  font-family: system-ui, sans-serif; font-size: 13px;
+}
+#ann-bar.open { display: flex; }
+#ann-bar button { font: inherit; cursor: pointer; border: 1px solid var(--soft); border-radius: 8px; background: transparent; color: var(--fg); padding: .28rem .55rem; }
+#ann-bar .dot { width: 22px; height: 22px; padding: 0; border-radius: 50%; }
+#ann-bar .dot.yellow { background: rgba(255,214,64,.8); }
+#ann-bar .dot.green { background: rgba(126,217,87,.8); }
+#ann-bar .dot.blue { background: rgba(94,168,255,.8); }
+#ann-bar .dot.pink { background: rgba(255,143,195,.8); }
+#ann-note {
+  position: fixed; z-index: 46; display: none; width: min(88vw, 22rem);
+  background: var(--bg); border: 1px solid var(--soft); border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(0,0,0,.26); padding: .6rem;
+  font-family: system-ui, sans-serif; font-size: 14px;
+}
+#ann-note.open { display: block; }
+#ann-note textarea {
+  width: 100%; box-sizing: border-box; min-height: 5rem; resize: vertical;
+  font: inherit; color: var(--fg); background: transparent;
+  border: 1px solid var(--soft); border-radius: 8px; padding: .45rem;
+}
+#ann-note .row { display: flex; gap: .5rem; justify-content: flex-end; margin-top: .5rem; }
+#ann-note button { font: inherit; padding: .32rem .75rem; border-radius: 8px; border: 1px solid var(--soft); background: transparent; color: var(--fg); cursor: pointer; }
 </style>"#;
 
 const SCRIPT: &str = r#"<script>
@@ -190,6 +247,212 @@ const SCRIPT: &str = r#"<script>
   if (headings.length === 0) nav.innerHTML = '<p style="color:var(--muted)">（没有可导航的标题）</p>';
 
   apply();
+
+  // ---- 批注（高亮/笔记）----
+  var annBar = document.getElementById('ann-bar');
+  var annNote = document.getElementById('ann-note');
+  var annNoteText = annNote.querySelector('textarea');
+  var pendingRange = null;
+  var activeAnnId = null;
+  var activeNoteAnnId = null;
+  var COLORS = ['yellow', 'green', 'blue', 'pink'];
+
+  function parentPost(message) { try { window.parent.postMessage(message, '*'); } catch (e) {} }
+  function hideAnnBar() { annBar.classList.remove('open'); pendingRange = null; activeAnnId = null; }
+
+  function blockOf(node) {
+    var el = node && node.nodeType === 3 ? node.parentElement : node;
+    return el && el.closest ? el.closest('[data-block]') : null;
+  }
+  function codePointLength(str) { return Array.from(str).length; }
+
+  function selectionInfo() {
+    var sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+    var range = sel.getRangeAt(0);
+    var block = blockOf(range.startContainer);
+    if (!block || block !== blockOf(range.endContainer)) return null;
+    if (range.toString().trim() === '') return null;
+    var existing = block.querySelectorAll('mark.hl');
+    for (var i = 0; i < existing.length; i++) {
+      if (range.intersectsNode(existing[i])) return null;
+    }
+    var pre = document.createRange();
+    pre.selectNodeContents(block);
+    try { pre.setEnd(range.startContainer, range.startOffset); } catch (e) { return null; }
+    var start = codePointLength(pre.toString());
+    return {
+      blockId: block.dataset.block,
+      start: start,
+      end: start + codePointLength(range.toString()),
+      text: range.toString(),
+      range: range
+    };
+  }
+
+  function positionBar(x, y) {
+    annBar.classList.add('open');
+    var width = annBar.offsetWidth || 240;
+    var left = Math.min(Math.max(8, x - width / 2), window.innerWidth - width - 8);
+    var top = y - annBar.offsetHeight - 10;
+    if (top < 8) top = y + 20;
+    annBar.style.left = left + 'px';
+    annBar.style.top = top + 'px';
+  }
+
+  function buildBar(addMode) {
+    annBar.innerHTML = '';
+    COLORS.forEach(function (color) {
+      var dot = document.createElement('button');
+      dot.className = 'dot ' + color;
+      dot.title = color;
+      dot.addEventListener('click', function (event) {
+        event.preventDefault();
+        if (addMode && pendingRange) {
+          parentPost({
+            type: 'cadmus:addAnnotation',
+            blockId: pendingRange.blockId,
+            start: pendingRange.start,
+            end: pendingRange.end,
+            text: pendingRange.text,
+            color: color
+          });
+          annBar.classList.remove('open');
+        } else if (activeAnnId) {
+          parentPost({ type: 'cadmus:annotationUpdated', id: activeAnnId, color: color });
+          var mark = document.querySelector('mark[data-ann="' + activeAnnId + '"]');
+          if (mark) mark.className = 'hl hl-' + color + (mark.dataset.note ? ' has-note' : '');
+          hideAnnBar();
+        }
+      });
+      annBar.appendChild(dot);
+    });
+    if (addMode) return;
+    var noteBtn = document.createElement('button');
+    noteBtn.textContent = '笔记';
+    noteBtn.addEventListener('click', function (event) {
+      event.preventDefault();
+      if (!activeAnnId) return;
+      activeNoteAnnId = activeAnnId;
+      var mark = document.querySelector('mark[data-ann="' + activeAnnId + '"]');
+      annNoteText.value = mark && mark.dataset.note ? mark.dataset.note : '';
+      var rect = annBar.getBoundingClientRect();
+      annNote.classList.add('open');
+      var width = annNote.offsetWidth || 320;
+      annNote.style.left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8) + 'px';
+      annNote.style.top = Math.min(rect.bottom + 8, window.innerHeight - 230) + 'px';
+      annNoteText.focus();
+    });
+    annBar.appendChild(noteBtn);
+    var delBtn = document.createElement('button');
+    delBtn.textContent = '删除';
+    delBtn.addEventListener('click', function (event) {
+      event.preventDefault();
+      if (!activeAnnId) return;
+      parentPost({ type: 'cadmus:annotationDeleted', id: activeAnnId });
+      var mark = document.querySelector('mark[data-ann="' + activeAnnId + '"]');
+      if (mark) {
+        var parent = mark.parentNode;
+        while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+        parent.removeChild(mark);
+        parent.normalize();
+      }
+      hideAnnBar();
+    });
+    annBar.appendChild(delBtn);
+  }
+
+  var selTimer = null;
+  document.addEventListener('selectionchange', function () {
+    if (selTimer) clearTimeout(selTimer);
+    selTimer = setTimeout(function () {
+      if (annNote.classList.contains('open')) return;
+      var info = selectionInfo();
+      if (info) {
+        pendingRange = info;
+        buildBar(true);
+        var rect = info.range.getBoundingClientRect();
+        positionBar(rect.left + rect.width / 2, rect.top);
+      } else if (!activeAnnId) {
+        annBar.classList.remove('open');
+      }
+    }, 200);
+  });
+
+  document.addEventListener('click', function (event) {
+    var mark = event.target && event.target.closest ? event.target.closest('mark.hl') : null;
+    if (mark) {
+      var sel = window.getSelection();
+      if (sel) sel.removeAllRanges();
+      activeAnnId = mark.dataset.ann;
+      buildBar(false);
+      var rect = mark.getBoundingClientRect();
+      positionBar(rect.left + rect.width / 2, rect.top);
+      return;
+    }
+    if (event.target && event.target.closest && event.target.closest('#ann-bar, #ann-note')) return;
+    if (!annNote.classList.contains('open')) hideAnnBar();
+  });
+
+  window.addEventListener('scroll', function () { annBar.classList.remove('open'); }, { passive: true });
+
+  document.getElementById('ann-note-cancel').addEventListener('click', function () {
+    annNote.classList.remove('open');
+  });
+  document.getElementById('ann-note-save').addEventListener('click', function () {
+    if (activeNoteAnnId) {
+      var value = annNoteText.value;
+      parentPost({ type: 'cadmus:annotationUpdated', id: activeNoteAnnId, note: value });
+      var mark = document.querySelector('mark[data-ann="' + activeNoteAnnId + '"]');
+      if (mark) {
+        if (value.trim()) {
+          mark.dataset.note = value;
+          mark.classList.add('has-note');
+        } else {
+          delete mark.dataset.note;
+          mark.classList.remove('has-note');
+        }
+      }
+    }
+    activeNoteAnnId = null;
+    annNote.classList.remove('open');
+    annBar.classList.remove('open');
+  });
+
+  window.addEventListener('message', function (event) {
+    var data = event.data || {};
+    if (data.type === 'cadmus:annotationSaved') {
+      if (pendingRange && pendingRange.range) {
+        var mark = document.createElement('mark');
+        mark.className = 'hl hl-' + (data.color || 'yellow');
+        mark.dataset.ann = data.id;
+        try {
+          mark.appendChild(pendingRange.range.extractContents());
+          pendingRange.range.insertNode(mark);
+          var sel = window.getSelection();
+          if (sel) sel.removeAllRanges();
+        } catch (e) {}
+      }
+      pendingRange = null;
+    } else if (data.type === 'cadmus:removeMark') {
+      var stale = document.querySelector('mark[data-ann="' + data.id + '"]');
+      if (stale) {
+        var holder = stale.parentNode;
+        while (stale.firstChild) holder.insertBefore(stale.firstChild, stale);
+        holder.removeChild(stale);
+        holder.normalize();
+      }
+    } else if (data.type === 'cadmus:jump') {
+      var target = data.annId ? document.querySelector('mark[data-ann="' + data.annId + '"]') : null;
+      if (!target && data.blockId) target = document.querySelector('[data-block="' + data.blockId + '"]');
+      if (target) {
+        target.scrollIntoView({ block: 'center', behavior: 'auto' });
+        target.classList.remove('flash');
+        void target.offsetWidth;
+        target.classList.add('flash');
+      }
+    }
+  });
 })();
 </script>"#;
 
@@ -213,6 +476,9 @@ pub fn render_to_string(
 
     html.push_str("<div id=\"scrim\"></div>\n");
     html.push_str("<aside id=\"toc\"><nav id=\"toc-nav\"></nav></aside>\n");
+    html.push_str(
+        "<div id=\"ann-bar\"></div>\n<div id=\"ann-note\"><textarea placeholder=\"写笔记…\"></textarea><div class=\"row\"><button id=\"ann-note-cancel\">取消</button><button id=\"ann-note-save\">保存</button></div></div>\n",
+    );
     html.push_str("<section id=\"sheet\">\n<h3>阅读设置</h3>\n");
     html.push_str("<div class=\"srow\"><label>字号</label><input id=\"s-fs\" type=\"range\" min=\"13\" max=\"30\" step=\"1\"><span class=\"val\" id=\"v-fs\"></span></div>\n");
     html.push_str("<div class=\"srow\"><label>行距</label><input id=\"s-lh\" type=\"range\" min=\"1.3\" max=\"2.2\" step=\"0.05\"><span class=\"val\" id=\"v-lh\"></span></div>\n");
@@ -270,16 +536,36 @@ fn render_block(html: &mut String, block: &Block, base: &Path, meta: &PreviewMet
     match (&block.kind, &block.payload) {
         (BlockKind::Heading { level }, Payload::Text(text)) => {
             let tag = if *level <= 1 { "h1" } else { "h2" };
-            let _ = writeln!(html, "<{tag}>{}</{tag}>", escape(text));
+            let _ = writeln!(
+                html,
+                "<{tag} data-block=\"{}\">{}</{tag}>",
+                block.id,
+                marked_text(text, block.id, meta.marks)
+            );
         }
         (BlockKind::Code, Payload::Text(text)) => {
-            let _ = writeln!(html, "<pre>{}</pre>", escape(text));
+            let _ = writeln!(
+                html,
+                "<pre data-block=\"{}\">{}</pre>",
+                block.id,
+                marked_text(text, block.id, meta.marks)
+            );
         }
         (BlockKind::Footnote, Payload::Text(text)) => {
-            let _ = writeln!(html, "<aside class=\"footnote\">{}</aside>", escape(text));
+            let _ = writeln!(
+                html,
+                "<aside class=\"footnote\" data-block=\"{}\">{}</aside>",
+                block.id,
+                marked_text(text, block.id, meta.marks)
+            );
         }
         (_, Payload::Text(text)) => {
-            let _ = writeln!(html, "<p>{}</p>", escape(text));
+            let _ = writeln!(
+                html,
+                "<p data-block=\"{}\">{}</p>",
+                block.id,
+                marked_text(text, block.id, meta.marks)
+            );
         }
         (BlockKind::Formula, Payload::Bitmap(bitmap)) => {
             let src = src_for(&bitmap.path, meta, base);
@@ -313,6 +599,50 @@ fn src_for(path: &str, meta: &PreviewMeta<'_>, base: &Path) -> String {
     }
 }
 
+/// 渲染块内文本并套用批注高亮（按字符偏移；重叠标记跳过，避免嵌套错误）。
+fn marked_text(text: &str, block_id: u64, marks: &[Mark]) -> String {
+    let block_key = block_id.to_string();
+    let mut applicable: Vec<&Mark> = marks
+        .iter()
+        .filter(|mark| mark.block_id == block_key)
+        .collect();
+    if applicable.is_empty() {
+        return escape(text);
+    }
+    applicable.sort_by_key(|mark| mark.start);
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::new();
+    let mut cursor = 0usize;
+    for mark in applicable {
+        let start = (mark.start as usize).min(chars.len());
+        let end = (mark.end as usize).min(chars.len());
+        if start < cursor || end <= start {
+            continue;
+        }
+        let before: String = chars[cursor..start].iter().collect();
+        out.push_str(&escape(&before));
+        let inner: String = chars[start..end].iter().collect();
+        let note_attr = match &mark.note {
+            Some(note) if !note.is_empty() => format!(" data-note=\"{}\"", escape(note)),
+            _ => String::new(),
+        };
+        let note_class = if mark.note.is_some() { " has-note" } else { "" };
+        let _ = write!(
+            out,
+            "<mark class=\"hl hl-{}{}\" data-ann=\"{}\"{}>{}</mark>",
+            escape(&mark.color),
+            note_class,
+            escape(&mark.id),
+            note_attr,
+            escape(&inner)
+        );
+        cursor = end;
+    }
+    let rest: String = chars[cursor..].iter().collect();
+    out.push_str(&escape(&rest));
+    out
+}
+
 fn relative(path: &str, base: &Path) -> String {
     Path::new(path)
         .strip_prefix(base)
@@ -337,7 +667,101 @@ mod tests {
             byline: None,
             cover: None,
             asset_src: None,
+            marks: &[],
         }
+    }
+
+    #[test]
+    fn renders_marks_around_ranges() {
+        let document = Document {
+            doc_hash: 1,
+            title: None,
+            blocks: vec![Block::text(42, BlockKind::Paragraph, 0, "开头中间结尾")],
+        };
+        let marks = [Mark {
+            block_id: "42".into(),
+            start: 2,
+            end: 4,
+            id: "a1".into(),
+            color: "yellow".into(),
+            note: None,
+        }];
+        let meta = PreviewMeta {
+            marks: &marks,
+            ..base_meta("t")
+        };
+        let html = render_to_string(&document, Path::new(""), &meta).unwrap();
+        assert!(
+            html.contains(
+                "<p data-block=\"42\">开头<mark class=\"hl hl-yellow\" data-ann=\"a1\">中间</mark>结尾</p>"
+            ),
+            "高亮应按字符区间包裹"
+        );
+    }
+
+    #[test]
+    fn marks_with_note_mark_the_marker() {
+        let document = Document {
+            doc_hash: 1,
+            title: None,
+            blocks: vec![Block::text(5, BlockKind::Paragraph, 0, "句子")],
+        };
+        let marks = [Mark {
+            block_id: "5".into(),
+            start: 0,
+            end: 2,
+            id: "n1".into(),
+            color: "blue".into(),
+            note: Some("注解".into()),
+        }];
+        let meta = PreviewMeta {
+            marks: &marks,
+            ..base_meta("t")
+        };
+        let html = render_to_string(&document, Path::new(""), &meta).unwrap();
+        assert!(
+            html.contains("class=\"hl hl-blue has-note\""),
+            "有笔记的高亮应带标记类"
+        );
+        assert!(html.contains("data-note=\"注解\""), "笔记内容应可预填");
+    }
+
+    #[test]
+    fn overlapping_marks_are_skipped() {
+        let document = Document {
+            doc_hash: 1,
+            title: None,
+            blocks: vec![Block::text(7, BlockKind::Paragraph, 0, "abcdef")],
+        };
+        let marks = [
+            Mark {
+                block_id: "7".into(),
+                start: 0,
+                end: 3,
+                id: "m1".into(),
+                color: "green".into(),
+                note: None,
+            },
+            Mark {
+                block_id: "7".into(),
+                start: 2,
+                end: 5,
+                id: "m2".into(),
+                color: "blue".into(),
+                note: None,
+            },
+        ];
+        let meta = PreviewMeta {
+            marks: &marks,
+            ..base_meta("t")
+        };
+        let html = render_to_string(&document, Path::new(""), &meta).unwrap();
+        assert!(
+            html.contains("<mark class=\"hl hl-green\" data-ann=\"m1\">abc</mark>"),
+            "首个高亮保留"
+        );
+        assert!(!html.contains("data-ann=\"m2\""), "重叠的第二个高亮跳过");
+        assert!(html.contains("def"), "余下文本完整");
     }
 
     #[test]
@@ -378,8 +802,8 @@ mod tests {
         };
         let html = render_to_string(&document, Path::new(""), &base_meta("t")).unwrap();
         assert!(
-            html.contains("<aside class=\"footnote\">脚注正文：解释。</aside>"),
-            "脚注块应渲染为 aside.footnote"
+            html.contains("<aside class=\"footnote\" data-block=\"3\">脚注正文：解释。</aside>"),
+            "脚注块应渲染为 aside.footnote（带块锚点）"
         );
     }
 

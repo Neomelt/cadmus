@@ -417,6 +417,9 @@ dependencies = [
 [[package]]
 name = "cadmus-core"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "cadmus-epub"
